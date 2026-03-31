@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chronicle Calendar</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <p class="eyebrow">Local First Schedule</p>
+        <h1>Chronicle Calendar</h1>
+        <p class="muted">月历、周历、待办与 AI 语义入口统一在一个本地优先原型里。</p>
+      </div>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>视图导航</h2>
+        </div>
+        <div class="segmented-control">
+          <button class="nav-btn is-active" data-view-target="month" type="button">月视图</button>
+          <button class="nav-btn" data-view-target="week" type="button">周视图</button>
+          <button class="nav-btn" data-view-target="todo" type="button">待办页</button>
+        </div>
+        <p class="panel-tip">月视图适合浏览全局，周视图适合按小时排程，待办页放未定时事项。</p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>统一 AI 对话</h2>
+          <button id="send-chat-btn" class="primary-btn" type="button">发送</button>
+        </div>
+        <div id="chat-history" class="chat-history empty-state">这里会显示解析、检索和系统反馈。</div>
+        <label>
+          对话意图
+          <select id="chat-intent">
+            <option value="auto">自动判断</option>
+            <option value="add">添加事项</option>
+            <option value="search">检索总结</option>
+          </select>
+        </label>
+        <textarea id="chat-input" rows="7" placeholder="示例：&#10;明天下午2点到4点去105上高数课，晚上回宿舍整理讲座证明&#10;或者：帮我找过去一年里和比赛报名、讲座、志愿服务相关的记录"></textarea>
+        <p class="panel-tip">现在添加事项和 AI 检索都走同一个对话框。自动模式会先判断更像新增还是检索。</p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>模型解析设置</h2>
+        </div>
+        <label>
+          解析模式
+          <select id="parse-mode">
+            <option value="local">本地规则</option>
+            <option value="llm">大模型 API</option>
+          </select>
+        </label>
+        <label>
+          API Base URL
+          <input id="api-base-url" type="text" placeholder="例如：https://api.openai.com/v1">
+        </label>
+        <label>
+          API Key
+          <input id="api-key" type="password" placeholder="留空则不调用远程模型">
+        </label>
+        <label>
+          Model
+          <input id="api-model" type="text" placeholder="例如：gpt-4o-mini">
+        </label>
+        <button id="save-settings-btn" class="secondary-btn" type="button">保存设置</button>
+        <p class="panel-tip">按 OpenAI 兼容接口接入。密钥会保存在当前浏览器本地存储中。</p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>数据管理</h2>
+        </div>
+        <div class="button-row">
+          <button id="export-btn" class="secondary-btn" type="button">导出 JSON</button>
+          <button id="import-btn" class="secondary-btn" type="button">导入 JSON</button>
+          <input id="import-file" type="file" accept="application/json" hidden>
+        </div>
+        <button id="seed-btn" class="ghost-btn" type="button">载入示例数据</button>
+        <p id="status-line" class="status-line">本地数据已就绪。</p>
+      </section>
+    </aside>
+
+    <main class="workspace">
+      <section id="month-view" class="view-panel">
+        <section class="calendar-panel">
+          <div class="calendar-toolbar">
+            <div class="month-nav">
+              <button id="prev-month-btn" type="button" aria-label="上个月">‹</button>
+              <h2 id="month-label"></h2>
+              <button id="next-month-btn" type="button" aria-label="下个月">›</button>
+            </div>
+            <div class="toolbar-actions">
+              <button id="today-btn" class="ghost-btn" type="button">回到今天</button>
+              <span id="selected-date-label" class="selected-date-label"></span>
+            </div>
+          </div>
+          <div class="calendar-weekdays" id="calendar-weekdays"></div>
+          <div class="calendar-grid" id="calendar-grid"></div>
+        </section>
+
+        <section class="detail-panel">
+          <div class="detail-columns">
+            <section class="panel details-card">
+              <div class="panel-header">
+                <h2>事项详情</h2>
+              </div>
+              <form id="event-form" class="event-form">
+                <input type="hidden" id="event-id">
+                <label>
+                  标题
+                  <input id="event-title" type="text" placeholder="例如：高数课 / 迎新签到">
+                </label>
+                <div class="field-grid">
+                  <label>
+                    日期
+                    <input id="event-date" type="date">
+                  </label>
+                  <label>
+                    全天
+                    <select id="event-all-day">
+                      <option value="false">否</option>
+                      <option value="true">是</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="field-grid">
+                  <label>
+                    开始时间
+                    <input id="event-start-time" type="time">
+                  </label>
+                  <label>
+                    结束时间
+                    <input id="event-end-time" type="time">
+                  </label>
+                </div>
+                <label>
+                  地点
+                  <input id="event-location" type="text" placeholder="例如：105 / 图书馆 302">
+                </label>
+                <label>
+                  备注
+                  <textarea id="event-notes" rows="5" placeholder="保留更多上下文，方便以后语义检索和总结。"></textarea>
+                </label>
+                <label>
+                  原始输入
+                  <textarea id="event-raw-input" rows="4" placeholder="手动编辑时也会保存为一条原始输入记录。"></textarea>
+                </label>
+                <div class="button-row">
+                  <button id="save-event-btn" class="primary-btn" type="submit">保存事项</button>
+                  <button id="delete-event-btn" class="danger-btn" type="button">删除事项</button>
+                  <button id="reset-form-btn" class="ghost-btn" type="button">清空表单</button>
+                </div>
+              </form>
+            </section>
+
+            <section class="panel draft-card">
+              <div class="panel-header">
+                <h2>待确认草稿</h2>
+                <span id="draft-count" class="chip">0</span>
+              </div>
+              <div id="draft-list" class="draft-list empty-state">
+                还没有草稿。你可以先在左侧输入自然语言。
+              </div>
+            </section>
+          </div>
+
+          <div class="detail-columns lower-columns">
+            <section class="panel list-card">
+              <div class="panel-header">
+                <h2>当日事项</h2>
+              </div>
+              <div id="daily-event-list" class="daily-event-list empty-state">
+                当前日期还没有事项。
+              </div>
+            </section>
+
+            <section class="panel trace-card">
+              <div class="panel-header">
+                <h2>追溯信息</h2>
+              </div>
+              <div id="trace-panel" class="trace-panel empty-state">
+                选中一条事项后，这里会显示原始输入、快照和变更记录。
+              </div>
+            </section>
+          </div>
+        </section>
+      </section>
+
+      <section id="week-view" class="view-panel is-hidden">
+        <section class="calendar-panel">
+          <div class="calendar-toolbar">
+            <div class="month-nav">
+              <button id="prev-week-btn" type="button" aria-label="上一周">‹</button>
+              <h2 id="week-label"></h2>
+              <button id="next-week-btn" type="button" aria-label="下一周">›</button>
+            </div>
+            <div class="toolbar-actions">
+              <button id="current-week-btn" class="ghost-btn" type="button">本周</button>
+            </div>
+          </div>
+          <div id="week-grid" class="week-grid"></div>
+        </section>
+      </section>
+
+      <section id="todo-view" class="view-panel is-hidden">
+        <div class="detail-columns">
+          <section class="panel">
+            <div class="panel-header">
+              <h2>待办事项</h2>
+            </div>
+            <form id="todo-form" class="event-form">
+              <input type="hidden" id="todo-id">
+              <label>
+                标题
+                <input id="todo-title" type="text" placeholder="例如：整理讲座证明 / 查比赛报名时间">
+              </label>
+              <label>
+                说明
+                <textarea id="todo-notes" rows="5" placeholder="未明确规定时间的轻事项也会参与后续 AI 检索。"></textarea>
+              </label>
+              <label>
+                优先级
+                <select id="todo-priority">
+                  <option value="normal">普通</option>
+                  <option value="high">高</option>
+                  <option value="low">低</option>
+                </select>
+              </label>
+              <label>
+                原始输入
+                <textarea id="todo-raw-input" rows="4" placeholder="比如：有空的时候整理综测证明材料"></textarea>
+              </label>
+              <div class="button-row">
+                <button id="save-todo-btn" class="primary-btn" type="submit">保存待办</button>
+                <button id="delete-todo-btn" class="danger-btn" type="button">删除待办</button>
+                <button id="reset-todo-btn" class="ghost-btn" type="button">清空表单</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <h2>待办列表</h2>
+              <span id="todo-count" class="chip">0</span>
+            </div>
+            <div id="todo-list" class="daily-event-list empty-state">还没有待办事项。</div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="day-modal" class="day-modal">
+    <div class="panel modal-panel">
+      <div class="panel-header">
+        <h2 id="day-modal-title">当天安排</h2>
+        <button id="close-day-modal-btn" class="ghost-btn" type="button">关闭</button>
+      </div>
+      <div id="day-modal-content" class="daily-event-list empty-state">暂无内容。</div>
+    </div>
+  </dialog>
+
+  <script src="./src/app.js"></script>
+</body>
+</html>
