@@ -1,11 +1,29 @@
 # Chronicle Calendar
 
-这是一版本地优先日程原型，当前重点验证四件事：
+这是一版本地优先的时间与检索原型，当前重点验证四件事：
 
 - 月视图与周视图的日历管理
 - 待办事项与日程共存
 - 统一 AI 对话框同时负责“添加事项”和“语义检索”
-- 原始输入、快照、变更记录的可追溯存储
+- 原始输入、检索层、追溯层的可追溯存储
+
+## 新线程接手前先看
+
+如果你准备在 Codex 中切换线程、分工作树或让新的线程接手，请优先阅读：
+
+1. [docs/project-overview.md](/Users/nacl/Desktop/日程/docs/project-overview.md)
+2. [docs/architecture-v2.md](/Users/nacl/Desktop/日程/docs/architecture-v2.md)
+2. [docs/ui-brief.md](/Users/nacl/Desktop/日程/docs/ui-brief.md)
+3. [docs/db-brief.md](/Users/nacl/Desktop/日程/docs/db-brief.md)
+4. [docs/ai-brief.md](/Users/nacl/Desktop/日程/docs/ai-brief.md)
+
+其中：
+
+- `project-overview.md` 是全局背景
+- `architecture-v2.md` 是当前推荐的整体架构
+- `ui-brief.md` 给 UI 线程
+- `db-brief.md` 给数据库线程
+- `ai-brief.md` 给 AI 功能线程
 
 ## 直接使用
 
@@ -116,16 +134,23 @@ chronicle-calendar-v1
 所以你在项目文件夹里看不到单独的数据文件，这是正常的。  
 目前项目目录里的文件主要只是界面和逻辑代码，不包含运行中数据。
 
-现在的数据结构主要有：
+当前 `v2` 原型里的主数据结构已经收敛为：
 
-- `events`
-- `todos`
+- `records`
 - `rawInputs`
+- `searchDocs`
 - `drafts`
-- `snapshots`
-- `changeLog`
+- `traceLogs`
+- `attachments`
 - `chatMessages`
 - `settings`
+
+其中：
+
+- `records` 统一承载 `calendar / task / note / memory`
+- `rawInputs` 永久保留原始输入
+- `searchDocs` 是轻量检索层
+- `traceLogs` 保存快照与字段变更等追溯信息
 
 ## 导入导出
 
@@ -156,8 +181,8 @@ chronicle-calendar-v1
 - 冲突检测
 - 真正的全文检索与向量语义检索
 - 更强的 AI 检索解释链
-- SQLite 文件持久化
-- Tauri 桌面封装
+- 真正接通 SQLite 文件持久化
+- 完整接通 Tauri 桌面封装
 - 系统通知
 - 多设备同步
 
@@ -169,3 +194,18 @@ chronicle-calendar-v1
 2. `重复事件与冲突检测`
 3. `真正的全文检索 / 语义检索`
 4. `Tauri 桌面封装`
+
+## 当前仓库里的 v2 骨架
+
+目前仓库已经包含：
+
+- [docs/architecture-v2.md](/Users/nacl/Desktop/日程/docs/architecture-v2.md)
+- [docs/sqlite-schema-v2.sql](/Users/nacl/Desktop/日程/docs/sqlite-schema-v2.sql)
+- `src/app.js` 中的 `records / rawInputs / searchDocs / traceLogs` 本地原型结构
+- `src-tauri/` 最小桌面端技术骨架
+
+说明：
+
+- 当前浏览器版仍然使用 `localStorage` 运行
+- `src-tauri/` 是下一阶段接入 SQLite 的桌面端脚手架
+- 这两者当前还没有完全接线
