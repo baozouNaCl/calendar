@@ -1,3 +1,7 @@
+/* v3 视觉层说明：
+   - 左侧视觉强调“秘书工作台”
+   - 右侧视觉强调“database 的工作视图”
+   - 配色仍保持温暖、轻量，本身不对 AI 或 database 做强绑定 */
 :root {
   --surface: rgba(255, 252, 246, 0.92);
   --surface-strong: #fffaf1;
@@ -15,6 +19,7 @@
   --font-body: "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
 }
 
+/* 全局重置与基础排版。 */
 * {
   box-sizing: border-box;
 }
@@ -66,6 +71,7 @@ select:focus {
   border-color: rgba(17, 94, 89, 0.35);
 }
 
+/* 双栏骨架：左侧秘书工作台，右侧日历工作区。 */
 .app-shell {
   display: grid;
   grid-template-columns: var(--sidebar-width, 360px) 1fr;
@@ -75,6 +81,7 @@ select:focus {
   position: relative;
 }
 
+/* 侧边栏宽度可拖拽，用来适配聊天与工作区的占比。 */
 .sidebar-resize-handle {
   position: fixed;
   top: 24px;
@@ -97,6 +104,7 @@ select:focus {
   background: rgba(17, 94, 89, 0.16);
 }
 
+/* 所有主要卡片共享玻璃感与阴影，建立统一的信息容器语言。 */
 .sidebar,
 .calendar-panel,
 .panel {
@@ -104,6 +112,7 @@ select:focus {
   box-shadow: var(--shadow);
 }
 
+/* 左栏是秘书工作台，不只是普通导航栏。 */
 .sidebar {
   background: rgba(249, 242, 233, 0.85);
   border: 1px solid rgba(91, 70, 50, 0.09);
@@ -145,20 +154,23 @@ select:focus {
   align-content: start;
 }
 
+/* 右侧主工作区卡片，对应 database 的可视化主舞台。 */
 .workspace-frame {
   background: rgba(255, 252, 246, 0.76);
   border: 1px solid rgba(91, 70, 50, 0.09);
   border-radius: 32px;
-  padding: 18px;
+  padding: 0;
   box-shadow: var(--shadow);
   backdrop-filter: blur(14px);
   display: grid;
-  gap: 18px;
+  gap: 0;
+  overflow: hidden;
 }
 
 .workspace-body {
   display: grid;
   gap: 20px;
+  padding: 18px;
 }
 
 .day-view-layout {
@@ -199,6 +211,7 @@ select:focus {
   font-size: 1.1rem;
 }
 
+/* AI 标识只表达“秘书入口”，避免把页面整体做成聊天产品。 */
 .ai-heading {
   display: inline-flex;
   align-items: center;
@@ -312,12 +325,14 @@ select:focus {
   gap: 8px;
 }
 
+/* 顶部视图导航：切换 database 的不同读写视角。 */
 .workspace-topbar {
-  padding: 6px 4px 2px;
+  padding: 18px 18px 14px;
   overflow: hidden;
-  background: transparent;
-  border: 0;
-  box-shadow: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.32), rgba(255, 252, 246, 0.18));
+  border-bottom: 1px solid rgba(91, 70, 50, 0.08);
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.22);
   backdrop-filter: none;
 }
 
@@ -327,6 +342,10 @@ select:focus {
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
+}
+
+.top-view-nav {
+  position: relative;
 }
 
 .top-view-nav {
@@ -357,6 +376,10 @@ select:focus {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+  padding: 8px 10px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.42);
+  border: 1px solid rgba(91, 70, 50, 0.08);
 }
 
 .tag-filter-bar select {
@@ -369,6 +392,7 @@ select:focus {
   font-size: 0.9rem;
 }
 
+/* month/day/week 共用的日历网格基础语言。 */
 .calendar-weekdays,
 .calendar-grid {
   display: grid;
@@ -437,6 +461,7 @@ select:focus {
   gap: 12px;
 }
 
+/* 标签、事件气泡和对话气泡都使用圆角芯片语言，保持轻量信息感。 */
 .event-chip,
 .todo-chip,
 .tag-chip {
@@ -465,6 +490,7 @@ select:focus {
   border: 1px solid var(--tag-border, rgba(17, 94, 89, 0.16));
 }
 
+/* 聊天区在 v3 中承担“秘书对话轨迹”，区分 user / ai / bot 三类身份。 */
 .chat-history {
   min-height: 180px;
   max-height: 260px;
@@ -474,6 +500,9 @@ select:focus {
   padding-right: 6px;
 }
 
+/* AI 与机器人都属于 assistant，但视觉上刻意区分：
+   - AI：实线、偏柔和渐变
+   - bot：虚线、偏工具提示感 */
 .chat-message {
   border-radius: 16px;
   padding: 12px 14px;
@@ -544,6 +573,7 @@ select:focus {
   overflow: auto;
 }
 
+/* 日视图摘要卡负责把 database 中的单日状态压缩成可一眼扫读的摘要。 */
 .selected-day-summary {
   min-height: 220px;
   display: grid;
@@ -627,6 +657,7 @@ select:focus {
   color: var(--muted);
 }
 
+/* week 视图强调连续时间轴，是 database 时间记录的空间化表达。 */
 .week-grid {
   margin-top: 18px;
   overflow: hidden;

@@ -1,0 +1,11 @@
+{
+  "name": "chronicle-calendar-database",
+  "displayName": "Chronicle Calendar Database Package",
+  "version": "3.0.0",
+  "schemaVersion": 1,
+  "storageEngine": "sqlite",
+  "primarySchemaFile": "migrations/0001_init.sql",
+  "secretaryReadme": "SECRETARY_README.md",
+  "developerEntry": "README.md",
+  "notes": "This directory is designed to be self-describing for humans, UI shells, and LLM agents."
+}

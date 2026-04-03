@@ -1,4 +1,3 @@
-const STORAGE_KEY = "chronicle-calendar-v1";
 const WEEKDAY_LABELS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 const DAY_START_HOUR = 6;
 const DAY_END_HOUR = 23;
@@ -8,6 +7,32 @@ const DAY_HOUR_HEIGHT = 24;
 const VIEW_SEQUENCE = ["day", "month", "week", "todo"];
 const TEST_IMPORT_TAG = "test";
 const TEST_IMPORT_COLOR = "#9f1239";
+const SQLITE_DB_URL = "sqlite:database/data/chronicle-calendar.db";
+/*
+  Chronicle Calendar v3 架构总览
+
+  当前前端原型已经开始收敛为三部分：
+
+  1. database 原型层
+     - 保存 records / rawInputs / searchDocs / traceLogs / drafts
+     - 为 UI 提供结构化读写能力
+     - 为秘书层提供通用工具接口
+
+  2. secretary LLM 层
+     - 理解用户自然语言
+     - 决定要不要调用 database 工具
+     - 执行工具并把结果组织成自然语言回复
+
+  3. UI shell 层
+     - 承载页面结构、交互事件和可视化编辑
+     - 不负责定义 database 真相
+     - 不负责定义 secretary 的工具调用策略
+
+  当前 app.js 的职责已经收缩为：
+  - 把三层接起来
+  - 保留 UI 壳层逻辑
+  - 通过薄适配调用 database 与 secretary 模块
+*/
 const DEFAULT_SETTINGS = {
   parseMode: "local",
   apiBaseUrl: "https://api.openai.com/v1",
@@ -15,8 +40,60 @@ const DEFAULT_SETTINGS = {
   apiModel: "gpt-4o-mini",
 };
 
+const { createDatabaseStore } = window.ChronicleDatabaseStore;
+const { createDatabaseQuery } = window.ChronicleDatabaseQuery;
+const { createSecretaryAssistant } = window.ChronicleSecretaryAssistant;
+
+const databaseStore = createDatabaseStore({
+  defaultSettings: DEFAULT_SETTINGS,
+  sqliteDbUrl: SQLITE_DB_URL,
+  cloneValue,
+  normalizeHexColor,
+  createId,
+  normalizeTagRegistry,
+  setStatus,
+});
+
+const databaseQuery = createDatabaseQuery({
+  getDb: () => state.db,
+  getRecordById,
+  getRawInputById,
+  getRawInputsForRecord,
+  getLatestRawInputForRecord,
+  getTraceLogsForRecord,
+  recordMatchesActiveTagFilter,
+  normalizeDraftConfidence,
+  buildChatCompletionsEndpoint,
+  buildModelRequestErrorMessage,
+  expandSearchTerms,
+  rankSearchResults,
+  isoDate,
+});
+
+const secretaryAssistant = createSecretaryAssistant({
+  getDb: () => state.db,
+  queryApi: databaseQuery,
+  parseNaturalLanguage,
+  createDraftId: () => createId("draft"),
+  normalizeDraftDate,
+  normalizeDraftTime,
+  normalizeDraftConfidence,
+  buildChatCompletionsEndpoint,
+  buildModelRequestErrorMessage,
+  persistState,
+  render,
+  renderDrafts,
+  appendChatMessage,
+  setStatus,
+  expandSidebarForAi,
+  inferChatIntent,
+});
+
+// 当前原型把核心 UI 状态和数据状态都收口在这里。
+// 这轮改动新增的重点是 AI 工作台宽度、横向滑动状态机、全局标签表，
+// 所以下一个同事排查交互问题时，优先检查这些字段是否被意外改写。
 const state = {
-  db: loadState(),
+  db: databaseStore.createEmptyState(),
   visibleMonth: startOfMonth(new Date()),
   visibleWeek: startOfWeek(new Date()),
   selectedDate: isoDate(new Date()),
@@ -26,9 +103,10 @@ const state = {
   editingTodoId: null,
   dayDrag: null,
   sidebarWidth: 360,
-  viewSwipe: { accumulator: 0, lastAt: 0 },
+  viewSwipe: { accumulatorX: 0, accumulatorY: 0, lastAt: 0, lastTriggerAt: 0, lockedAxis: null },
 };
 
+// 所有 DOM 引用统一集中在这里，避免后续在业务逻辑里到处 querySelector。
 const refs = {
   sidebarHandle: document.querySelector("#sidebar-resize-handle"),
   sidebar: document.querySelector(".sidebar"),
@@ -98,11 +176,17 @@ const refs = {
   importConfigFileName: document.querySelector("#import-config-file-name"),
   importTagInput: document.querySelector("#import-tag-input"),
   importTagColor: document.querySelector("#import-tag-color"),
+  mountPackageRoot: document.querySelector("#mount-package-root"),
+  mountStatus: document.querySelector("#mount-status"),
 };
 
-init();
+/* ---------- App bootstrap ---------- */
+init().catch((error) => {
+  console.error("Chronicle Calendar init failed:", error);
+});
 
-function init() {
+async function init() {
+  state.db = await databaseStore.initializeStorage();
   applySidebarWidth(state.sidebarWidth);
   renderWeekdays();
   renderTagFilterOptions();
@@ -111,8 +195,15 @@ function init() {
   seedEmptyInputForm();
   seedEmptyTodoForm();
   render();
+  refreshDatabaseMountStatus().catch((error) => {
+    console.warn("Failed to refresh database mount status:", error);
+  });
 }
 
+/* ---------- Event binding ----------
+   这里负责把 UI 手势、按钮、弹窗与 state / database 接口接线。
+   它只处理“触发入口”，不在这里写复杂业务判断。
+*/
 function bindEvents() {
   refs.sidebarHandle.addEventListener("mousedown", beginSidebarResize);
   refs.chatInput.addEventListener("focus", () => expandSidebarForAi());
@@ -132,7 +223,7 @@ function bindEvents() {
     if (refs.tagFilterSelect) refs.tagFilterSelect.value = "";
     render();
   });
-  refs.workspaceFrame.addEventListener("wheel", handleViewWheelSwitch, { passive: false });
+  window.addEventListener("wheel", handleViewWheelSwitch, { passive: false, capture: true });
 
   document.querySelector("#prev-day-btn").addEventListener("click", () => {
     state.selectedDate = isoDate(addDays(parseDate(state.selectedDate), -1));
@@ -200,6 +291,9 @@ function bindEvents() {
   document.querySelector("#export-btn").addEventListener("click", handleExport);
   document.querySelector("#import-btn").addEventListener("click", () => refs.importFile.click());
   document.querySelector("#seed-btn").addEventListener("click", seedDemoData);
+  document.querySelector("#apply-mount-btn").addEventListener("click", handleApplyDatabaseMount);
+  document.querySelector("#clear-mount-btn").addEventListener("click", handleClearDatabaseMount);
+  document.querySelector("#refresh-mount-btn").addEventListener("click", refreshDatabaseMountStatus);
   refs.importFile.addEventListener("change", handleImport);
   document.querySelector("#open-event-editor-btn").addEventListener("click", () => {
     state.editingEventId = null;
@@ -248,6 +342,7 @@ function render() {
   updateSelectedDateLabel();
 }
 
+/* 顶层 render 负责把当前状态投影到页面，不直接承担数据判断或 AI 推理。 */
 function syncViewState() {
   refs.viewButtons.forEach((button) => button.classList.toggle("is-active", button.dataset.viewTarget === state.activeView));
   refs.dayView.classList.toggle("is-hidden", state.activeView !== "day");
@@ -256,6 +351,7 @@ function syncViewState() {
   refs.todoView.classList.toggle("is-hidden", state.activeView !== "todo");
 }
 
+// 侧栏既要支持自动放大，也要允许用户手动微调，所以拖拽入口仍然保留。
 function beginSidebarResize(event) {
   const startX = event.clientX;
   const startWidth = state.sidebarWidth;
@@ -272,52 +368,94 @@ function beginSidebarResize(event) {
   document.addEventListener("mouseup", handleUp);
 }
 
+// 所有侧栏宽度变化统一走这里，避免自动扩展和手动拖拽使用不同边界值。
 function applySidebarWidth(width) {
   const next = Math.max(300, Math.min(560, Math.round(width)));
   state.sidebarWidth = next;
   document.documentElement.style.setProperty("--sidebar-width", `${next}px`);
 }
 
+// 当用户聚焦 AI 输入时主动给更多空间，强调 AI 是核心工作流的一部分。
 function expandSidebarForAi() {
   if (state.sidebarWidth < 420) {
     applySidebarWidth(440);
   }
 }
 
+// 触摸板横滑切视图的状态机。
+// 这里用“累计位移 + 轴向锁定 + 冷却时间”来尽量兼容不同设备，而不是依赖单次 wheel 事件。
 function handleViewWheelSwitch(event) {
-  const interactive = event.target.closest("input, textarea, select, dialog");
-  if (interactive) return;
-  if (event.target.closest("#top-view-nav")) return;
+  if (event.ctrlKey || event.metaKey) return;
+  if (event.target.closest(".sidebar, dialog")) {
+    resetViewSwipeIfIdle(Date.now(), true);
+    return;
+  }
+  const interactive = event.target.closest("input, textarea, select, #top-view-nav");
+  if (interactive) {
+    resetViewSwipeIfIdle(Date.now(), true);
+    return;
+  }
   const absX = Math.abs(event.deltaX);
   const absY = Math.abs(event.deltaY);
-  if (absX < 6) return;
-  if (absX < absY * 0.66) return;
-  const currentIndex = VIEW_SEQUENCE.indexOf(state.activeView);
-  if (currentIndex === -1) return;
   const now = Date.now();
-  if (now - state.viewSwipe.lastAt > 220) {
-    state.viewSwipe.accumulator = 0;
+  if (absX < 2 && absY < 2) return;
+  resetViewSwipeIfIdle(now, false);
+  state.viewSwipe.accumulatorX += event.deltaX;
+  state.viewSwipe.accumulatorY += event.deltaY;
+  state.viewSwipe.lastAt = now;
+
+  if (!state.viewSwipe.lockedAxis) {
+    if (Math.abs(state.viewSwipe.accumulatorX) > 14 && Math.abs(state.viewSwipe.accumulatorX) > Math.abs(state.viewSwipe.accumulatorY) * 1.05) {
+      state.viewSwipe.lockedAxis = "x";
+    } else if (Math.abs(state.viewSwipe.accumulatorY) > 18 && Math.abs(state.viewSwipe.accumulatorY) > Math.abs(state.viewSwipe.accumulatorX) * 1.08) {
+      state.viewSwipe.lockedAxis = "y";
+    } else {
+      return;
+    }
   }
-  state.viewSwipe.accumulator += event.deltaX;
-  if (Math.abs(state.viewSwipe.accumulator) < 95) {
+
+  if (state.viewSwipe.lockedAxis !== "x") {
+    return;
+  }
+
+  if (Math.abs(state.viewSwipe.accumulatorX) < 26) {
     event.preventDefault();
     return;
   }
-  if (now - state.viewSwipe.lastAt < 420) {
+  const currentIndex = VIEW_SEQUENCE.indexOf(state.activeView);
+  if (currentIndex === -1) return;
+
+  if (Math.abs(state.viewSwipe.accumulatorX) < 62) {
+    event.preventDefault();
+    return;
+  }
+  if (now - state.viewSwipe.lastTriggerAt < 360) {
     event.preventDefault();
     return;
   }
   event.preventDefault();
-  const direction = state.viewSwipe.accumulator > 0 ? 1 : -1;
+  const direction = state.viewSwipe.accumulatorX > 0 ? 1 : -1;
   const nextIndex = Math.max(0, Math.min(VIEW_SEQUENCE.length - 1, currentIndex + direction));
   if (nextIndex !== currentIndex) {
     state.activeView = VIEW_SEQUENCE[nextIndex];
     render();
   }
-  state.viewSwipe.accumulator = 0;
-  state.viewSwipe.lastAt = now;
+  state.viewSwipe.accumulatorX = 0;
+  state.viewSwipe.accumulatorY = 0;
+  state.viewSwipe.lockedAxis = null;
+  state.viewSwipe.lastTriggerAt = now;
 }
 
+// 清掉过期累计量，避免用户停顿后再次轻扫时误触发跨视图切换。
+function resetViewSwipeIfIdle(now, force) {
+  if (force || now - state.viewSwipe.lastAt > 180) {
+    state.viewSwipe.accumulatorX = 0;
+    state.viewSwipe.accumulatorY = 0;
+    state.viewSwipe.lockedAxis = null;
+  }
+}
+
+// 日视图现在是“紧凑型工作台”，负责当天摘要、列表与轻量拖拽创建，不再追求铺满整页时间轴。
 function renderDayView() {
   const selected = parseDate(state.selectedDate);
   refs.dayLabel.textContent = formatDayLabel(selected);
@@ -446,6 +584,8 @@ function renderMonthDay(day, monthStart) {
 }
 
 function renderWeekView() {
+  // 周视图保留完整连续时间轴，因为它承担更高密度的排程任务；
+  // 全天区与时间轴区分开，后续才方便继续做冲突避让和并排布局。
   const weekStart = state.visibleWeek;
   refs.weekLabel.textContent = `${isoDate(weekStart)} 至 ${isoDate(addDays(weekStart, 6))}`;
   const weekDays = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
@@ -703,6 +843,7 @@ function renderTodos() {
 }
 
 function renderTagRow(tags = [], tagColor = "#115e59") {
+  // 标签颜色优先来自全局标签表，record 上的 tagColor 只作为兼容旧数据的回退值。
   if (!tags?.length) return "";
   return `<div class="tag-row">${tags.map((tag) => `<span class="tag-chip" style="${buildTagStyle(resolveTagColor(tag, tagColor))}">${escapeHtml(tag)}</span>`).join("")}</div>`;
 }
@@ -776,6 +917,14 @@ async function handleChatSubmit() {
   appendChatMessage("user", text);
   refs.chatInput.value = "";
   try {
+    if (refs.chatIntent.value === "auto" && canUseLlmRouting()) {
+      try {
+        await handleSecretaryAssistantTurn(text);
+        return;
+      } catch (error) {
+        appendChatMessage("assistant", `AI 秘书暂时不可用，已回退到机器人流程。原因：${error.message}`, { agent: "bot" });
+      }
+    }
     const decision = await resolveChatIntent(text);
     if (decision.notice) {
       appendChatMessage("assistant", decision.notice, { agent: "bot" });
@@ -792,70 +941,34 @@ async function handleChatSubmit() {
   }
 }
 
+/*
+  v3 的秘书入口。
+  自动模式下优先让 LLM 扮演秘书：
+  - 先理解用户有没有必要调用 database
+  - 再决定调用哪个工具
+  - 最后组织自然回复
+*/
+async function handleSecretaryAssistantTurn(text) {
+  return secretaryAssistant.handleSecretaryAssistantTurn(text);
+}
+
 async function resolveChatIntent(text) {
   if (refs.chatIntent.value !== "auto") {
     return { intent: refs.chatIntent.value, routeAgent: "bot", notice: "" };
   }
-
-  if (canUseLlmRouting()) {
-    try {
-      const intent = await classifyChatIntentWithLlm(text);
-      return { intent, routeAgent: "ai", notice: "" };
-    } catch (error) {
-      return {
-        intent: inferChatIntent(text),
-        routeAgent: "bot",
-        notice: `AI 意图判断暂时不可用，已回退到机器人规则。原因：${error.message}`,
-      };
-    }
-  }
-
-  if (state.db.settings.parseMode === "llm" && !state.db.settings.apiKey?.trim()) {
-    return {
-      intent: inferChatIntent(text),
-      routeAgent: "bot",
-      notice: "当前是大模型模式，但还没有可用的 API Key。已回退到机器人规则判断意图。",
-    };
-  }
-
-  return { intent: inferChatIntent(text), routeAgent: "bot", notice: "" };
+  return secretaryAssistant.resolveChatIntent(text);
 }
 
 function canUseLlmRouting() {
-  return state.db.settings.parseMode === "llm" && Boolean(state.db.settings.apiKey?.trim());
+  return secretaryAssistant.canUseLlmRouting();
 }
 
 async function handleUnifiedAdd(text, routeAgent = "bot") {
-  expandSidebarForAi();
-  setStatus("正在解析新增事项...");
-  const useLlmParser = state.db.settings.parseMode === "llm";
-  const drafts = useLlmParser ? await parseNaturalLanguageWithLlm(text) : parseNaturalLanguage(text);
-  drafts.forEach((draft) => state.db.drafts.unshift(draft));
-  persistState();
-  renderDrafts();
-  appendChatMessage("assistant", `已生成 ${drafts.length} 条草稿，请在“待确认草稿”中确认或编辑。`, {
-    agent: useLlmParser || routeAgent === "ai" ? "ai" : "bot",
-  });
-  setStatus(`已生成 ${drafts.length} 条草稿。`);
+  return secretaryAssistant.handleUnifiedAdd(text, routeAgent);
 }
 
 async function handleUnifiedSearch(text, routeAgent = "bot") {
-  expandSidebarForAi();
-  setStatus("正在检索事项与待办...");
-  const localResults = localSearch(text);
-  let summary = buildSearchSummary(localResults, text);
-  let responseAgent = routeAgent === "ai" ? "ai" : "bot";
-  if (state.db.settings.parseMode === "llm" && state.db.settings.apiKey) {
-    try {
-      summary = await summarizeSearchWithLlm(text, localResults);
-      responseAgent = "ai";
-    } catch (error) {
-      summary += `\n\n模型总结失败，已回退到本地结果。原因：${error.message}`;
-      responseAgent = "bot";
-    }
-  }
-  appendChatMessage("assistant", summary, { agent: responseAgent });
-  setStatus("检索已完成。");
+  return secretaryAssistant.handleUnifiedSearch(text, routeAgent);
 }
 
 function inferChatIntent(text) {
@@ -912,6 +1025,54 @@ function handleSaveSettings() {
   refs.settingsModal.close();
 }
 
+async function handleApplyDatabaseMount() {
+  const packageRoot = refs.mountPackageRoot.value.trim();
+  if (!packageRoot) {
+    setStatus("请先填写外部 database package 的绝对路径。");
+    refs.mountPackageRoot.focus();
+    return;
+  }
+
+  try {
+    const mountStatus = await databaseStore.configureDatabaseMount(packageRoot);
+    renderDatabaseMountStatus(mountStatus);
+    setStatus("外部 database package 挂载成功。请重启桌面应用后继续使用该数据库。");
+  } catch (error) {
+    setStatus(`挂载外部数据库失败：${error.message}`);
+  }
+}
+
+async function handleClearDatabaseMount() {
+  try {
+    const mountStatus = await databaseStore.clearDatabaseMount();
+    renderDatabaseMountStatus(mountStatus);
+    setStatus("已取消外部数据库挂载。请重启桌面应用后继续使用默认数据库。");
+  } catch (error) {
+    setStatus(`取消外部挂载失败：${error.message}`);
+  }
+}
+
+async function refreshDatabaseMountStatus() {
+  try {
+    const mountStatus = await databaseStore.getMountStatus();
+    renderDatabaseMountStatus(mountStatus);
+    setStatus("数据库挂载状态已刷新。");
+  } catch (error) {
+    setStatus(`读取数据库挂载状态失败：${error.message}`);
+  }
+}
+
+function renderDatabaseMountStatus(mountStatus) {
+  if (!refs.mountStatus) return;
+  const packageRoot = mountStatus?.packageRoot || "";
+  if (refs.mountPackageRoot) {
+    refs.mountPackageRoot.value = packageRoot;
+  }
+  refs.mountStatus.textContent = mountStatus?.note
+    ? `${mountStatus.note}${mountStatus.appDbPath ? ` 当前 app 数据入口：${mountStatus.appDbPath}` : ""}`
+    : "当前未配置外部数据库挂载。";
+}
+
 async function handleEventAiAssist() {
   const text = refs.eventAiInput.value.trim();
   if (!text) {
@@ -921,6 +1082,8 @@ async function handleEventAiAssist() {
   }
 
   try {
+    // AI 在这里扮演的是“帮你填表”的助手，而不是绕过确认直接写库。
+    // 这样既保留了轻量化体验，也保留了人为兜底。
     setStatus("正在为当前日程弹窗解析内容...");
     const drafts = state.db.settings.parseMode === "llm"
       ? await parseNaturalLanguageWithLlm(text)
@@ -1147,7 +1310,7 @@ function handleConfirmImport() {
           : `已从 ICS 导入 ${importedCount} 条日程。`);
         refs.dataModal.close();
       } else {
-        state.db = normalizeImportedState(JSON.parse(content));
+        state.db = databaseStore.normalizeImportedState(JSON.parse(content));
         state.editingEventId = null;
         state.editingTodoId = null;
         persistState();
@@ -1372,6 +1535,10 @@ function createTodoFromDraft(draft) {
   });
 }
 
+/* ---------- Database write APIs ----------
+   这些函数代表 database 的正式写接口。
+   不论来源是 UI、导入流程还是秘书生成的草稿，都应尽量复用这些入口。
+*/
 function createEventFromForm(payload, options = {}) {
   const now = new Date().toISOString();
   const eventId = createId("evt");
@@ -1613,199 +1780,80 @@ function parseNaturalLanguage(text) {
   });
 }
 
+/* LLM 解析器只负责“把输入转为草稿”，不负责决定是否应该调用它。 */
 async function parseNaturalLanguageWithLlm(text) {
-  const settings = state.db.settings;
-  if (!settings.apiKey) {
-    throw new Error("当前解析模式是大模型 API，但还没有填写 API Key。");
-  }
-  const now = new Date();
-  const todayIso = isoDate(now);
-  const endpoint = buildChatCompletionsEndpoint(settings.apiBaseUrl);
-  let response;
-  try {
-    response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${settings.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: settings.apiModel,
-        temperature: 0.1,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: "你是一个日程与待办解析器。你的任务是把用户输入拆分为多个草稿。相对时间必须以用户当前本地时间为准。输出 JSON 对象：{\"drafts\":[...]}。每个 draft 包含 recordType(event或todo), rawText, proposedTitle, proposedDate, proposedStartTime, proposedEndTime, proposedLocation, proposedNotes, allDay, priority, confidence, ambiguities。",
-          },
-          {
-            role: "user",
-            content: `当前本地时间是 ${now.toISOString()}，当前日期是 ${todayIso}。\n请解析以下输入：\n${text}`,
-          },
-        ],
-      }),
-    });
-  } catch (error) {
-    throw new Error(buildModelRequestErrorMessage(endpoint, error));
-  }
-  if (!response.ok) {
-    throw new Error(`API 请求失败：${response.status}，接口地址 ${endpoint}，返回内容：${await response.text()}`);
-  }
-  const json = await response.json();
-  const content = json.choices?.[0]?.message?.content;
-  if (!content) throw new Error("模型没有返回可解析内容。");
-  let parsed;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    throw new Error("模型返回的不是合法 JSON。");
-  }
-  const drafts = Array.isArray(parsed.drafts) ? parsed.drafts : [];
-  if (!drafts.length) throw new Error("模型没有生成草稿。");
-  return drafts.map((draft) => ({
-    id: createId("draft"),
-    createdAt: new Date().toISOString(),
-    status: "pending",
-    recordType: draft.recordType === "todo" ? "todo" : "event",
-    rawText: String(draft.rawText || ""),
-    proposedTitle: String(draft.proposedTitle || draft.rawText || "待确认事项"),
-    proposedDate: normalizeDraftDate(draft.proposedDate, todayIso),
-    proposedStartTime: normalizeDraftTime(draft.proposedStartTime),
-    proposedEndTime: normalizeDraftTime(draft.proposedEndTime),
-    proposedLocation: String(draft.proposedLocation || ""),
-    proposedNotes: String(draft.proposedNotes || ""),
-    allDay: Boolean(draft.allDay),
-    priority: String(draft.priority || "normal"),
-    confidence: normalizeDraftConfidence(draft.confidence),
-    ambiguities: Array.isArray(draft.ambiguities) ? draft.ambiguities.map(String) : [],
-  }));
+  return secretaryAssistant.parseNaturalLanguageWithLlm(text);
 }
 
 async function classifyChatIntentWithLlm(text) {
-  const settings = state.db.settings;
-  const endpoint = buildChatCompletionsEndpoint(settings.apiBaseUrl);
-  let response;
-  try {
-    response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${settings.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: settings.apiModel,
-        temperature: 0,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: "你是日历应用的意图路由器。请判断用户这句话更适合走 add 还是 search。add 用于新增日程/待办/安排；search 用于查询、回顾、统计、总结、询问最近/最早/是否有某类记录。只输出 JSON：{\"intent\":\"add\"} 或 {\"intent\":\"search\"}。",
-          },
-          {
-            role: "user",
-            content: text,
-          },
-        ],
-      }),
-    });
-  } catch (error) {
-    throw new Error(buildModelRequestErrorMessage(endpoint, error));
-  }
-  if (!response.ok) {
-    throw new Error(`AI 意图判断失败：${response.status}`);
-  }
-  const json = await response.json();
-  const content = json.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error("AI 没有返回意图判断结果。");
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    throw new Error("AI 返回的意图判断不是合法 JSON。");
-  }
-  return parsed.intent === "add" ? "add" : "search";
+  return secretaryAssistant.classifyChatIntentWithLlm(text);
 }
 
+/* ---------- Secretary planning & tool execution ----------
+   这里是 v3 的核心增强层：秘书先规划，再调用 database 工具，再整理输出。
+*/
+async function planSecretaryToolUsage(text) {
+  return secretaryAssistant.planSecretaryToolUsage(text);
+}
+
+async function executeSecretaryToolCall(toolCall, originalText) {
+  return secretaryAssistant.executeSecretaryToolCall(toolCall, originalText);
+}
+
+async function buildDraftsFromText(text) {
+  return secretaryAssistant.buildDraftsFromText(text);
+}
+
+async function composeSecretaryReply(userText, plan, toolResults) {
+  return secretaryAssistant.composeSecretaryReply(userText, plan, toolResults);
+}
+
+function buildSecretaryFallbackReply(toolResults, replyPrefix = "") {
+  return secretaryAssistant.buildSecretaryFallbackReply(toolResults, replyPrefix);
+}
+
+/* ---------- Database read APIs ----------
+   这些函数是秘书可以间接使用的通用读接口。
+   重点是保持通用，而不是围绕某个例子写死。
+*/
 function localSearch(query) {
-  const terms = expandSearchTerms(query);
-  return rankSearchResults(state.db.searchDocs
-    .map((searchDoc) => {
-      const haystack = String(searchDoc.searchText || "").toLowerCase();
-      const score = terms.reduce((sum, term) => sum + (haystack.includes(term) ? 1 : 0), 0);
-      const record = searchDoc.recordId ? getRecordById(searchDoc.recordId) : null;
-      const rawInput = searchDoc.rawInputId ? getRawInputById(searchDoc.rawInputId) : null;
-      return { searchDoc, record, rawInput, score };
-    })
-    .filter((item) => item.score > 0)
-    .filter((item) => item.record ? item.record.status === "active" && recordMatchesActiveTagFilter(item.record) : true)
-  , query).slice(0, 12);
+  return databaseQuery.localSearch(query);
+}
+
+async function searchRecordsSemantically(query, limit = 8, recordTypes = []) {
+  return databaseQuery.searchRecordsSemantically(query, limit, recordTypes);
+}
+
+function serializeRecordForAssistant(record) {
+  return databaseQuery.serializeRecordForAssistant(record);
+}
+
+function listRecordsForAssistant(options = {}) {
+  return databaseQuery.listRecordsForAssistant(options);
+}
+
+function getRecordDetailForAssistant(recordId) {
+  return databaseQuery.getRecordDetailForAssistant(recordId);
+}
+
+function normalizeAssistantRecordTypes(value) {
+  return databaseQuery.normalizeAssistantRecordTypes(value);
+}
+
+function normalizeAssistantDate(value) {
+  return databaseQuery.normalizeAssistantDate(value);
+}
+
+function formatAssistantRecord(record) {
+  return databaseQuery.formatAssistantRecord(record);
 }
 
 function buildSearchSummary(results, query) {
-  if (!results.length) {
-    return `没有找到与“${query}”明显匹配的事项或待办。`;
-  }
-  const lines = results.map(({ record, searchDoc, score }) => {
-    if (!record) {
-      return `线索 | ${searchDoc.searchText} | 匹配分:${score}`;
-    }
-    if (record.recordType === "task") {
-      return `待办 | ${record.title} | 优先级:${record.priority} | 匹配分:${score}`;
-    }
-    if (record.recordType === "memory") {
-      return `记忆 | ${record.title} | 匹配分:${score}`;
-    }
-    return `日程 | ${record.date} ${record.allDay ? "全天/未定时" : `${record.startTime || "未定"}-${record.endTime || "未定"}`} | ${record.title} | 匹配分:${score}`;
-  });
-  return `围绕“${query}”检索到 ${results.length} 条候选：\n${lines.join("\n")}`;
+  return databaseQuery.buildSearchSummary(results, query);
 }
 
 async function summarizeSearchWithLlm(query, results) {
-  const settings = state.db.settings;
-  const endpoint = buildChatCompletionsEndpoint(settings.apiBaseUrl);
-  const candidates = results.map(({ record, searchDoc, rawInput }) => ({
-    type: record?.recordType || searchDoc.searchTypeHint,
-    title: record?.title || "记忆线索",
-    date: record?.date || null,
-    time: record?.startTime ? `${record.startTime}-${record.endTime || ""}` : null,
-    notes: record?.notes || rawInput?.inputText || "",
-    location: record?.location || "",
-    priority: record?.priority || null,
-    searchText: searchDoc.searchText,
-  }));
-  let response;
-  try {
-    response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${settings.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: settings.apiModel,
-        temperature: 0.2,
-        messages: [
-          {
-            role: "system",
-            content: "你是一个日程检索助手。基于给定候选项，用中文给出简短总结，指出最相关的记录并说明理由。不要编造候选外的信息。",
-          },
-          {
-            role: "user",
-            content: `用户查询：${query}\n候选记录：${JSON.stringify(candidates)}`,
-          },
-        ],
-      }),
-    });
-  } catch (error) {
-    throw new Error(buildModelRequestErrorMessage(endpoint, error));
-  }
-  if (!response.ok) {
-    throw new Error(`模型检索总结失败：${response.status}`);
-  }
-  const json = await response.json();
-  return json.choices?.[0]?.message?.content || buildSearchSummary(results, query);
+  return secretaryAssistant.summarizeSearchWithLlm(query, results);
 }
 
 function buildSearchDocEntry(record, payload, type, rawInputId) {
@@ -1863,178 +1911,45 @@ function getActiveRecordsByType(recordType) {
   return state.db.records.filter((item) => item.recordType === recordType && item.status === "active" && recordMatchesActiveTagFilter(item));
 }
 
+function persistState() {
+  databaseStore.persistState(state.db);
+}
+
 function getRecordById(recordId) {
-  if (!recordId) return null;
-  return state.db.records.find((item) => String(item.id) === String(recordId)) || null;
+  return databaseStore.getRecordById(state.db, recordId);
 }
 
 function getRawInputById(rawInputId) {
-  if (!rawInputId) return null;
-  return state.db.rawInputs.find((item) => String(item.id) === String(rawInputId)) || null;
+  return databaseStore.getRawInputById(state.db, rawInputId);
 }
 
 function getRawInputsForRecord(recordId) {
-  return state.db.rawInputs.filter((item) => String(item.recordId) === String(recordId));
+  return databaseStore.getRawInputsForRecord(state.db, recordId);
 }
 
 function getLatestRawInputForRecord(recordId) {
-  return getRawInputsForRecord(recordId)[0] || null;
+  return databaseStore.getLatestRawInputForRecord(state.db, recordId);
 }
 
 function getTraceLogsForRecord(recordId) {
-  return state.db.traceLogs.filter((item) => String(item.recordId) === String(recordId));
+  return databaseStore.getTraceLogsForRecord(state.db, recordId);
 }
 
 function getSearchDocForRecord(recordId) {
-  return state.db.searchDocs.find((item) => String(item.recordId) === String(recordId)) || null;
+  return databaseStore.getSearchDocForRecord(state.db, recordId);
 }
 
 function upsertSearchDoc(searchDoc) {
-  const existingIndex = state.db.searchDocs.findIndex((item) => String(item.id) === String(searchDoc.id));
-  if (existingIndex >= 0) {
-    state.db.searchDocs[existingIndex] = searchDoc;
-    return;
-  }
-  state.db.searchDocs.unshift(searchDoc);
+  databaseStore.upsertSearchDoc(state.db, searchDoc);
 }
 
 function removeSearchDocsForRecord(recordId) {
-  state.db.searchDocs = state.db.searchDocs.filter((item) => String(item.recordId) !== String(recordId));
-}
-
-function buildLegacySearchText(record) {
-  return [
-    record.date || "",
-    record.startTime || "",
-    record.endTime || "",
-    record.title || "",
-    record.location || "",
-    record.notes || "",
-    ...(record.tags || []),
-    record.priority || "",
-    record.searchDoc?.compactText || "",
-  ].filter(Boolean).join(" ");
-}
-
-function loadState() {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) return createEmptyState();
-  try {
-    return normalizeImportedState(JSON.parse(raw));
-  } catch {
-    return createEmptyState();
-  }
-}
-
-function persistState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.db));
-}
-
-function createEmptyState() {
-  return {
-    version: 3,
-    tags: [],
-    records: [],
-    rawInputs: [],
-    searchDocs: [],
-    drafts: [],
-    traceLogs: [],
-    attachments: [],
-    chatMessages: [],
-    settings: { ...DEFAULT_SETTINGS },
-  };
-}
-
-function normalizeImportedState(data) {
-  const normalizedTags = normalizeTagRegistry(data);
-  const rawInputs = Array.isArray(data.rawInputs)
-    ? data.rawInputs.map((item) => ({ ...item, recordId: item.recordId || item.eventId || item.todoId }))
-    : [];
-
-  if (Array.isArray(data.records)) {
-    return {
-      version: 3,
-      tags: normalizedTags,
-      records: data.records.map((item) => ({
-        ...item,
-        tags: item.tags || [],
-        tagColor: normalizeHexColor(item.tagColor || "#115e59"),
-      })),
-      rawInputs,
-      searchDocs: Array.isArray(data.searchDocs) ? data.searchDocs : [],
-      drafts: Array.isArray(data.drafts) ? data.drafts : [],
-      traceLogs: Array.isArray(data.traceLogs) ? data.traceLogs : [],
-      attachments: Array.isArray(data.attachments) ? data.attachments : [],
-      chatMessages: Array.isArray(data.chatMessages) ? data.chatMessages : [],
-      settings: { ...DEFAULT_SETTINGS, ...(data.settings || {}) },
-    };
-  }
-
-  const legacyEvents = Array.isArray(data.events) ? data.events : [];
-  const legacyTodos = Array.isArray(data.todos) ? data.todos : [];
-  const records = [
-    ...legacyEvents.map((item) => ({
-      ...item,
-      recordType: "calendar",
-      tags: item.tags || [],
-      tagColor: normalizeHexColor(item.tagColor || "#115e59"),
-    })),
-    ...legacyTodos.map((item) => ({
-      ...item,
-      recordType: "task",
-      completed: Boolean(item.completed),
-      tags: item.tags || [],
-      tagColor: normalizeHexColor(item.tagColor || "#115e59"),
-    })),
-  ];
-  const searchDocs = records.map((record) => ({
-    id: createId("search"),
-    recordId: record.id,
-    rawInputId: record.rawInputId || null,
-    searchTypeHint: record.recordType,
-    searchText: buildLegacySearchText(record),
-    importance: record.recordType === "task" ? 0.72 : 0.8,
-    updatedAt: record.updatedAt || record.createdAt || new Date().toISOString(),
-  }));
-  const traceLogs = [
-    ...(Array.isArray(data.snapshots) ? data.snapshots.map((item) => ({
-      id: item.id || createId("trace"),
-      recordId: item.recordId || item.eventId || item.todoId,
-      traceType: "snapshot",
-      snapshotType: item.snapshotType || "legacy_snapshot",
-      payload: item.payload,
-      createdAt: item.savedAt || new Date().toISOString(),
-      createdBy: item.savedBy || "legacy_import",
-    })) : []),
-    ...(Array.isArray(data.changeLog) ? data.changeLog.map((item) => ({
-      id: item.id || createId("trace"),
-      recordId: item.recordId || item.eventId || item.todoId,
-      traceType: "field_change",
-      field: item.field,
-      oldValue: item.oldValue,
-      newValue: item.newValue,
-      createdBy: item.changedBy || "legacy_import",
-      createdAt: item.changedAt || new Date().toISOString(),
-    })) : []),
-  ];
-
-  return {
-    version: 3,
-    tags: normalizedTags,
-    records,
-    rawInputs,
-    searchDocs,
-    drafts: Array.isArray(data.drafts) ? data.drafts : [],
-    traceLogs,
-    attachments: Array.isArray(data.attachments) ? data.attachments : [],
-    chatMessages: Array.isArray(data.chatMessages) ? data.chatMessages : [],
-    settings: { ...DEFAULT_SETTINGS, ...(data.settings || {}) },
-  };
+  databaseStore.removeSearchDocsForRecord(state.db, recordId);
 }
 
 function seedDemoData() {
   if (state.db.records.length > 0) {
-    setStatus("当前已有数据，若想体验示例可以先导出后再清空本地存储。");
+    setStatus("当前已有数据，若想体验示例可以先导出后再清空当前数据。");
     return;
   }
   createEventFromForm({
@@ -2133,6 +2048,8 @@ function parseTagInput(value) {
 }
 
 function normalizeTagRegistry(data) {
+  // 全局标签表既要吃新结构里的 tags，也要从旧记录里反推出标签与颜色，
+  // 否则升级后会出现“标签名字还在，但颜色丢了”的体验断层。
   const registry = new Map();
   const seed = Array.isArray(data.tags) ? data.tags : [];
   seed.forEach((tag) => {
@@ -2155,6 +2072,7 @@ function normalizeTagRegistry(data) {
 }
 
 function ensureGlobalTags(tags = [], preferredColor = "#115e59") {
+  // 新建或编辑记录时顺手维护标签注册表，让标签真正成为全局能力而不是局部字符串。
   if (!Array.isArray(state.db.tags)) state.db.tags = [];
   tags.forEach((tag) => {
     if (!tag) return;
@@ -2169,6 +2087,7 @@ function ensureGlobalTags(tags = [], preferredColor = "#115e59") {
 }
 
 function resolveTagColor(tag, fallback = "#115e59") {
+  // 同名标签统一颜色，保证日程、待办、检索结果看到的是同一套视觉语言。
   const found = state.db.tags?.find((item) => item.name === tag);
   return normalizeHexColor(found?.color || fallback);
 }
@@ -2345,6 +2264,8 @@ function eventToTimelineMinutes(event) {
 }
 
 function eventToWeekTimelinePosition(event, weekDays) {
+  // 周视图拖拽需要同时得到“落在哪一天”和“落在几点”，
+  // 这里把二维坐标一次性映射成 dateIso + minutes，供预览和最终创建共用。
   const surface = refs.weekGrid.querySelector("#week-grid-surface");
   if (!surface) return null;
   const rect = surface.getBoundingClientRect();

@@ -7,15 +7,23 @@
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
+  <!--
+    v3 页面结构说明：
+    1. 左侧 sidebar 是“秘书工作台”，承载统一对话、草稿确认和模型/数据入口。
+    2. 右侧 workspace 是“database 对应的可视化工作区”，承载日历、待办和追溯视图。
+    3. 统一对话不直接等于数据库操作，而是秘书与 database 工具之间的桥。
+  -->
   <div class="app-shell">
     <div id="sidebar-resize-handle" class="sidebar-resize-handle" aria-hidden="true"></div>
     <aside class="sidebar">
+      <!-- 品牌区：说明这个产品仍然是时间管理工具，而不是纯聊天机器人。 -->
       <div class="brand">
         <p class="eyebrow">Local First Schedule</p>
         <h1>Chronicle Calendar</h1>
         <p class="muted">月历、周历、待办与 AI 语义入口统一在一个本地优先原型里。</p>
       </div>
 
+      <!-- 秘书入口：自动模式下优先让 LLM 决定是否需要调用 database 工具。 -->
       <section class="panel">
         <div class="panel-header">
           <h2 class="ai-heading"><span class="ai-mark" aria-hidden="true"><span></span><span></span><span></span></span>统一 AI 对话</h2>
@@ -34,6 +42,7 @@
         <p class="panel-tip">现在添加事项和 AI 检索都走同一个对话框。自动模式会先让 AI 判断意图；如果模型暂时不可用，会明确提示并回退到机器人规则。</p>
       </section>
 
+      <!-- 草稿承接层：database 不直接写死最终记录，先通过待确认草稿交给用户确认。 -->
       <section class="panel">
         <div class="panel-header">
           <h2 class="ai-heading"><span class="ai-mark" aria-hidden="true"><span></span><span></span><span></span></span>待确认草稿</h2>
@@ -45,6 +54,7 @@
         <p class="panel-tip">这里承接 AI 解析后的候选事项，先由你确认，再正式入库。</p>
       </section>
 
+      <!-- 辅助入口：模型设置和数据管理独立出来，避免和秘书主对话混杂。 -->
       <div class="sidebar-utility">
         <button id="open-settings-btn" class="mini-utility-btn" type="button"><span class="ai-mark ai-mark-inline" aria-hidden="true"><span></span><span></span><span></span></span>模型设置</button>
         <button id="open-data-btn" class="mini-utility-btn" type="button">数据管理</button>
@@ -54,6 +64,7 @@
 
     <main class="workspace">
       <section id="workspace-frame" class="workspace-frame">
+        <!-- 顶部导航只负责切换 database 的不同可视化视图，不承担 AI 逻辑。 -->
         <section class="workspace-topbar">
           <div class="topbar-layout">
             <div id="top-view-nav" class="top-view-nav" aria-label="视图导航">
@@ -73,6 +84,7 @@
         </section>
 
         <div class="workspace-body">
+      <!-- 日视图：最适合快速排程和当天执行。 -->
       <section id="day-view" class="view-panel is-hidden">
         <div class="day-view-layout">
           <section class="calendar-panel day-view-panel">
@@ -135,6 +147,7 @@
         </div>
       </section>
 
+      <!-- 月视图：只负责全局浏览，不直接塞入复杂编辑逻辑。 -->
       <section id="month-view" class="view-panel">
         <section class="calendar-panel">
           <div class="calendar-toolbar">
@@ -153,6 +166,7 @@
         </section>
       </section>
 
+      <!-- 周视图：负责连续时间轴浏览与拖拽建档。 -->
       <section id="week-view" class="view-panel is-hidden">
         <section class="calendar-panel">
           <div class="calendar-toolbar">
@@ -169,6 +183,7 @@
         </section>
       </section>
 
+      <!-- 待办视图：和 calendar 并列存在，同样是 database 的正式记录类型。 -->
       <section id="todo-view" class="view-panel is-hidden">
         <div class="todo-layout">
           <section class="panel todo-quick-create">
@@ -225,6 +240,7 @@
     </main>
   </div>
 
+  <!-- 单日详情弹窗：用于快速查看某天已有记录，不承担结构化编辑。 -->
   <dialog id="day-modal" class="day-modal">
     <div class="panel modal-panel">
       <div class="panel-header">
@@ -235,6 +251,7 @@
     </div>
   </dialog>
 
+  <!-- 事项编辑弹窗：database 的结构化编辑入口，同时嵌入一句话 AI 辅助。 -->
   <dialog id="event-editor-modal" class="day-modal">
     <div class="panel modal-panel event-editor-panel">
       <div class="panel-header compact-panel-header">
@@ -315,6 +332,7 @@
     </div>
   </dialog>
 
+  <!-- 模型设置：控制秘书接入哪个 OpenAI 兼容模型。 -->
   <dialog id="settings-modal" class="day-modal">
     <div class="panel modal-panel utility-modal-panel">
       <div class="panel-header">
@@ -343,10 +361,11 @@
       <div class="button-row">
         <button id="save-settings-btn" class="primary-btn" type="button">保存设置</button>
       </div>
-      <p class="panel-tip">按 OpenAI 兼容接口接入。密钥会保存在当前浏览器本地存储中。</p>
+      <p class="panel-tip">按 OpenAI 兼容接口接入。桌面端会随 SQLite 一起持久化；浏览器模式只保留当前会话内存态。</p>
     </div>
   </dialog>
 
+  <!-- 数据管理：显式放出导入导出，而不是把数据操作藏进 AI 对话。 -->
   <dialog id="data-modal" class="day-modal">
     <div class="panel modal-panel utility-modal-panel">
       <div class="panel-header">
@@ -358,10 +377,24 @@
         <button id="import-btn" class="secondary-btn" type="button">导入 JSON / ICS</button>
         <input id="import-file" type="file" accept="application/json,text/calendar,.ics" hidden>
       </div>
+      <div class="mount-box">
+        <label>
+          外部 database package 路径
+          <input id="mount-package-root" type="text" placeholder="例如：/Users/你的名字/Documents/MyCalendarDatabase">
+        </label>
+        <div class="button-row">
+          <button id="apply-mount-btn" class="secondary-btn" type="button">挂载外部数据库</button>
+          <button id="clear-mount-btn" class="ghost-btn" type="button">取消挂载</button>
+          <button id="refresh-mount-btn" class="ghost-btn" type="button">刷新状态</button>
+        </div>
+        <p id="mount-status" class="panel-tip">当前未读取桌面端挂载状态。</p>
+        <p class="panel-tip">当前版本通过桌面端符号链接把 app 数据入口挂到外部 database package。切换挂载后请重启应用。</p>
+      </div>
       <button id="seed-btn" class="ghost-btn" type="button">载入示例数据</button>
     </div>
   </dialog>
 
+  <!-- 导入配置：让 ICS / JSON 导入仍然通过结构化确认进入 database。 -->
   <dialog id="import-config-modal" class="day-modal">
     <div class="panel modal-panel utility-modal-panel">
       <div class="panel-header">
@@ -385,6 +418,13 @@
     </div>
   </dialog>
 
+  <!-- 独立 database store 模块：把 database 的真实读写逻辑从 app.js 中抽离出来。 -->
+  <script src="./src/database/store.js"></script>
+  <!-- 独立 database query 模块：承接检索、列表和详情读取。 -->
+  <script src="./src/database/query.js"></script>
+  <!-- 独立 AI secretary 模块：承接模型规划、工具调用和秘书式回复。 -->
+  <script src="./src/secretary/assistant.js"></script>
+  <!-- 单文件前端原型逻辑。v3 里既包含秘书工具调用流程，也负责把 UI 接到 database store。 -->
   <script src="./src/app.js"></script>
 </body>
 </html>

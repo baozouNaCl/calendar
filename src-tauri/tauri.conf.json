@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Chronicle Calendar",
+  "version": "0.2.0",
+  "identifier": "com.chronicle.calendar",
+  "build": {
+    "frontendDist": "../",
+    "devUrl": "http://localhost:8080"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Chronicle Calendar",
+        "width": 1440,
+        "height": 960,
+        "minWidth": 1080,
+        "minHeight": 720,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "capabilities": [
+        "main-capability"
+      ]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": []
+  }
+}

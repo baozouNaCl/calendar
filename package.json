@@ -1,0 +1,35 @@
+{
+  "name": "chronicle-calendar",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "python3 -m http.server 8080",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.5.0",
+    "@tauri-apps/plugin-sql": "^2.3.2"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.5.0",
+    "playwright": "^1.58.2"
+  },
+  "description": "这是一版本地优先的时间与检索原型，当前重点验证四件事：",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/baozouNaCl/calendar.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/baozouNaCl/calendar/issues"
+  },
+  "homepage": "https://github.com/baozouNaCl/calendar#readme"
+}
