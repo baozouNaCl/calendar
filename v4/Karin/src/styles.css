@@ -1,0 +1,4186 @@
+/* v3 视觉层说明：
+   - 左侧视觉强调“秘书工作台”
+   - 右侧视觉强调“database 的工作视图”
+   - 配色仍保持温暖、轻量，本身不对 AI 或 database 做强绑定 */
+:root {
+  --surface: rgba(255, 252, 246, 0.92);
+  --surface-strong: #fffaf1;
+  --surface-elevated: rgba(255, 255, 255, 0.94);
+  --text: #2b241f;
+  --muted: #6e6259;
+  --line: rgba(81, 60, 42, 0.14);
+  --accent: #115e59;
+  --accent-soft: #d3efe9;
+  --ai: #0f766e;
+  --ai-soft: #def4ef;
+  --danger: #a43d35;
+  --shadow: 0 18px 40px rgba(61, 42, 26, 0.08);
+  --font-title: "Georgia", "Times New Roman", serif;
+  --font-body: "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+}
+
+:root[data-ui-theme="soft-sculpt"] {
+  --surface: #e0e5ec;
+  --surface-strong: #e0e5ec;
+  --surface-elevated: #f0f4f7;
+  --step-top: #e0e5ec;
+  --step-top-raised: #e0e5ec;
+  --step-top-inset: #d8dfe7;
+  --nui-light-bg-color: #e0e5ec;
+  --nui-light-text-color: #555b6e;
+  --nui-light-lights: rgba(255, 255, 255, 0.8);
+  --nui-light-shadows: rgba(163, 177, 198, 0.6);
+  --nui-shadow-offset: 8px;
+  --nui-shadow-blur: 16px;
+  --nui-border-radius: 24px;
+  --nui-dark-outer-shadow: 4px 4px 8px rgba(163, 177, 198, 0.48);
+  --nui-dark-outer-light: -4px -4px 8px rgba(255, 255, 255, 0.64);
+  --nui-dark-inset-shadow: inset 2px 2px 3px rgba(163, 177, 198, 0.72);
+  --nui-dark-inset-light: inset -2px -2px 3px rgba(200, 210, 225, 0.4);
+  --nui-inset-surface: #f6f9fc;
+  --text: #555b6e;
+  --muted: #8b97a8;
+  --line: rgba(163, 177, 198, 0.28);
+  --accent: #6b7b93;
+  --accent-soft: #d7e0ea;
+  --ai: #7a8ca5;
+  --ai-soft: #d9e2ec;
+  --danger: #ba8a8a;
+  --shadow: 8px 8px 16px rgba(163, 177, 198, 0.55), -8px -8px 16px rgba(255, 255, 255, 0.76);
+  --font-title: "Avenir Next", "SF Pro Display", "Helvetica Neue", sans-serif;
+  --font-body: "Avenir Next", "SF Pro Text", "PingFang SC", "Noto Sans SC", sans-serif;
+  /* 整个应用左右两大区域之间的缝隙。 */
+  --shell-gap: clamp(5px, 1.1vw, 10px);
+  /* 应用内容距离窗口四周的总留白；左右两边顶部是否“贴边”先看它。 */
+  --shell-padding: clamp(10px, 1vw, 14px);
+  /* 大面板自身的默认内边距。 */
+  --panel-padding: clamp(12px, 1vw, 18px);
+  /* 左侧栏的默认宽度范围，窗口变化时会在这个区间内弹性缩放。 */
+  --sidebar-base-width: clamp(340px, 24vw, 420px);
+  /* 顶部所有滑槽轨道的统一高度，左右两边第一层控件要对齐主要靠它。 */
+  --toolbar-rail-height: 38px;
+  /* 滑槽内部按钮和顶部辅助按钮的统一高度。 */
+  --toolbar-pill-height: 34px;
+  /* 滑槽内部按钮的左右内边距。 */
+  --toolbar-pill-padding: 12px;
+  /* 顶部父层的统一横向内边距。 */
+  --nav-shell-inline-padding: clamp(6px, 0.8vw, 10px);
+  /* 顶部导航父层距离外层大卡片上边缘的统一偏移。
+     左右两边共用这一个值，避免出现“行本身参数一样，但起跑线不同”的问题。 */
+  --nav-shell-top-offset: 0px;
+  /* 顶部第一层主行的统一上下留白。 */
+  --nav-row-block-padding: 1px;
+  /* 顶部第一层主行里左右两组之间的统一间距。 */
+  --nav-row-gap: 10px;
+}
+
+/* 全局重置与基础排版。 */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--text);
+  background:
+    radial-gradient(circle at top left, rgba(17, 94, 89, 0.1), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(164, 61, 53, 0.08), transparent 24%),
+    linear-gradient(160deg, #f8f2e9 0%, #f3e9db 100%);
+  min-height: 100vh;
+}
+
+:root[data-ui-theme="soft-sculpt"] body {
+  background-color: #e0e5ec;
+  background-image: none;
+  height: 100vh;
+  overflow: hidden;
+}
+
+body.is-resizing,
+body.is-resizing * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
+.is-hidden {
+  display: none !important;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  border: 0;
+  cursor: pointer;
+}
+
+textarea,
+input,
+select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 9px 11px;
+  background: #fffdf9;
+  color: var(--text);
+}
+
+textarea:focus,
+input:focus,
+select:focus {
+  outline: 2px solid rgba(17, 94, 89, 0.14);
+  border-color: rgba(17, 94, 89, 0.35);
+}
+
+/* 双栏骨架：左侧秘书工作台，右侧日历工作区。 */
+.app-shell {
+  display: grid;
+  grid-template-columns: minmax(320px, var(--sidebar-width, var(--sidebar-base-width))) minmax(0, 1fr);
+  gap: 4px;
+  min-height: 100vh;
+  padding: 16px;
+  position: relative;
+}
+
+:root[data-ui-theme="soft-sculpt"] .app-shell {
+  gap: var(--shell-gap);
+  padding: var(--shell-padding);
+  height: 100vh;
+}
+
+/* 侧边栏宽度可拖拽，用来适配聊天与工作区的占比。 */
+.sidebar-resize-handle {
+  position: fixed;
+  top: 50%;
+  left: calc(var(--shell-padding) + var(--sidebar-width, var(--sidebar-base-width)) + (var(--shell-gap) / 2));
+  width: 18px;
+  height: 140px;
+  transform: translate(-50%, -50%);
+  z-index: 20;
+  cursor: col-resize;
+  border-radius: 999px;
+}
+
+.sidebar-resize-handle::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 86px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: rgba(87, 102, 123, 0.38);
+}
+
+/* 所有主要卡片共享玻璃感与阴影，建立统一的信息容器语言。 */
+.sidebar,
+.calendar-panel,
+.panel {
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow);
+}
+
+:root[data-ui-theme="soft-sculpt"] .sidebar,
+:root[data-ui-theme="soft-sculpt"] .calendar-panel,
+:root[data-ui-theme="soft-sculpt"] .panel,
+:root[data-ui-theme="soft-sculpt"] .workspace-frame {
+  border: 0;
+  backdrop-filter: none;
+}
+
+:root[data-ui-theme="soft-sculpt"] .sidebar,
+:root[data-ui-theme="soft-sculpt"] .workspace-frame {
+  box-shadow:
+    var(--nui-dark-outer-shadow),
+    var(--nui-dark-outer-light);
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-panel,
+:root[data-ui-theme="soft-sculpt"] .panel {
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+/* 左栏是秘书工作台，不只是普通导航栏。 */
+.sidebar {
+  background: rgba(249, 242, 233, 0.85);
+  border: 1px solid rgba(91, 70, 50, 0.09);
+  border-radius: 24px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 280px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .sidebar {
+  background: var(--step-top);
+  border-radius: 28px;
+  padding: 0;
+  gap: 0;
+  box-shadow: var(--nui-dark-outer-shadow), var(--nui-dark-outer-light);
+  position: relative;
+  z-index: 3;
+  height: calc(100vh - (var(--shell-padding) * 2));
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+:is(.sidebar-topbar, .workspace-topbar) {
+  /* 顶部父层壳子：
+     左边对应 sidebar-topbar，右边对应 workspace-topbar。
+     这层只负责作为“第一行导航”的定位外壳，并统一承担顶部留白。 */
+  position: relative;
+  overflow: visible;
+  z-index: 6;
+  padding: var(--nav-shell-top-offset) var(--nav-shell-inline-padding) 0;
+}
+
+:is(.sidebar-header, .topbar-layout) {
+  /* 顶部第一层主行：
+     左边对应 sidebar-header，右边对应 topbar-layout。
+     两边都用同一套参数控制高度、间距和上下留白。
+     如果后面要继续调“左顶栏和右顶栏是否对齐”，优先改这里和上面的 nav 变量，不要再分开写。 */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--nav-row-gap);
+  flex-wrap: nowrap;
+  min-width: 0;
+  min-height: var(--toolbar-rail-height);
+  padding-block: var(--nav-row-block-padding);
+}
+
+.sidebar-header {
+  /* 左侧顶部第一行：
+     承载“设置”按钮和“Karin/草稿”滑槽。
+     如果只想调左侧顶部离窗口边缘的距离，最常改的是 padding-block。 */
+}
+
+.sidebar-header-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.sidebar-settings-btn {
+  /* 左侧“设置”按钮本体尺寸。
+     一般保持和顶部滑槽内部按钮一样高，这样第一层视觉基线会更齐。 */
+  min-width: 58px;
+  min-height: var(--toolbar-pill-height);
+  padding: 0 12px;
+  line-height: 1;
+}
+
+.sidebar-pane-nav {
+  /* 左侧小滑槽轨道。 */
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex: 0 0 auto;
+  width: fit-content;
+  max-width: 172px;
+  min-height: var(--toolbar-rail-height);
+  padding: 2px;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.sidebar-pane-highlight {
+  position: absolute;
+  top: 2px;
+  left: 0;
+  height: calc(100% - 4px);
+  width: var(--sidebar-pane-highlight-width, 72px);
+  border-radius: 999px;
+  transform: translateX(var(--sidebar-pane-highlight-x, 0px));
+  pointer-events: none;
+  transition: transform 300ms cubic-bezier(0.4, 0, 0.2, 1), width 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar-pane-nav .nav-btn {
+  position: relative;
+  z-index: 1;
+  min-height: var(--toolbar-pill-height);
+  padding: 0 var(--toolbar-pill-padding);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  line-height: 1;
+  font-size: 0.8rem;
+  min-width: 0;
+}
+
+.sidebar-main {
+  /* 左侧顶部第一层和下面 AI 卡片之间的缓冲距离。
+     顶栏以下的内容留白单独放在这里，这样 sidebar 外层容器就能和 workspace-frame 保持同构。 */
+  min-height: 0;
+  display: grid;
+  padding-top: clamp(8px, 0.9vw, 12px);
+}
+
+.sidebar-pane {
+  min-height: 0;
+  display: none;
+}
+
+.sidebar-pane.is-active {
+  display: grid;
+}
+
+.eyebrow {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--accent);
+  font-size: 0.72rem;
+}
+
+.muted,
+.panel-tip,
+.status-line {
+  color: var(--muted);
+}
+
+.panel-tip {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.workspace,
+.detail-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.workspace {
+  align-content: start;
+}
+
+/* 右侧主工作区卡片，对应 database 的可视化主舞台。 */
+.workspace-frame {
+  background: rgba(255, 252, 246, 0.76);
+  border: 1px solid rgba(91, 70, 50, 0.09);
+  border-radius: 26px;
+  padding: 0;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+}
+
+:root[data-ui-theme="soft-sculpt"] .workspace-frame {
+  background: var(--step-top);
+  border-radius: 30px;
+  box-shadow: var(--nui-dark-outer-shadow), var(--nui-dark-outer-light);
+  position: relative;
+  z-index: 1;
+  height: calc(100vh - (var(--shell-padding) * 2));
+  min-width: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+:root[data-ui-theme="soft-sculpt"] #month-view > .calendar-panel,
+:root[data-ui-theme="soft-sculpt"] #week-view > .calendar-panel,
+:root[data-ui-theme="soft-sculpt"] #day-view .day-view-panel {
+  background: var(--step-top);
+  border: 0;
+  border-radius: 24px;
+  padding: clamp(14px, 1.3vw, 20px);
+  box-shadow: 6px 6px 12px rgba(163, 177, 198, 0.45), -6px -6px 12px rgba(255, 255, 255, 0.66);
+  position: relative;
+  z-index: 1;
+}
+
+.workspace-body {
+  display: grid;
+  gap: 16px;
+  padding: 14px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .workspace-body {
+  gap: clamp(10px, 1vw, 16px);
+  padding: clamp(4px, 0.6vw, 8px) clamp(6px, 0.8vw, 10px) clamp(6px, 0.9vw, 10px);
+}
+
+.view-stage {
+  position: relative;
+}
+
+.day-view-layout {
+  display: grid;
+  gap: 16px;
+}
+
+.view-panel.is-hidden {
+  display: none;
+}
+
+.calendar-panel,
+.panel {
+  background: var(--surface);
+  border: 1px solid rgba(91, 70, 50, 0.09);
+  border-radius: 20px;
+  padding: 14px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-panel,
+:root[data-ui-theme="soft-sculpt"] .panel {
+  background: var(--step-top-raised);
+  border: 0;
+  border-radius: 22px;
+  padding: 16px;
+  box-shadow: 6px 6px 12px rgba(163, 177, 198, 0.42), -6px -6px 12px rgba(255, 255, 255, 0.72);
+  position: relative;
+  z-index: 2;
+}
+
+.calendar-toolbar,
+.panel-header,
+.month-nav,
+.toolbar-actions,
+.button-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.inline-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.calendar-toolbar,
+.panel-header {
+  justify-content: space-between;
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-toolbar {
+  /* 右侧第二层工具条：
+     控制“月份条/今天按钮/右侧提示”这一行本身的高度。 */
+  min-height: 44px;
+  align-items: center;
+}
+
+.month-nav h2,
+.panel h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.month-nav {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* AI 标识只表达“秘书入口”，避免把页面整体做成聊天产品。 */
+.ai-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mini-eyebrow {
+  margin: 0 0 6px;
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ai);
+}
+
+.ai-mark {
+  width: 19px;
+  height: 19px;
+  border-radius: 999px;
+  background: radial-gradient(circle at 30% 30%, #ffffff 0 12%, transparent 13%), linear-gradient(135deg, var(--ai) 0%, #53b3a7 100%);
+  display: inline-grid;
+  place-items: center;
+  position: relative;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+.ai-mark span {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.95);
+}
+
+.ai-mark span:nth-child(1) {
+  top: 5px;
+  left: 9px;
+}
+
+.ai-mark span:nth-child(2) {
+  bottom: 5px;
+  left: 5px;
+}
+
+.ai-mark span:nth-child(3) {
+  bottom: 5px;
+  right: 5px;
+}
+
+.ai-mark-inline {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.month-nav button,
+.ghost-btn,
+.secondary-btn,
+.primary-btn,
+.danger-btn,
+.nav-btn {
+  border-radius: 999px;
+  padding: 6px 10px;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+}
+
+:root[data-ui-theme="soft-sculpt"] .month-nav button,
+:root[data-ui-theme="soft-sculpt"] .ghost-btn,
+:root[data-ui-theme="soft-sculpt"] .secondary-btn,
+:root[data-ui-theme="soft-sculpt"] .primary-btn,
+:root[data-ui-theme="soft-sculpt"] .danger-btn,
+:root[data-ui-theme="soft-sculpt"] .nav-btn,
+:root[data-ui-theme="soft-sculpt"] .mini-utility-btn,
+:root[data-ui-theme="soft-sculpt"] .tag-inline-trigger,
+:root[data-ui-theme="soft-sculpt"] .chat-record-card {
+  border: 0;
+  background: #e0e5ec;
+  box-shadow: 4px 4px 8px rgba(163, 177, 198, 0.42), -4px -4px 8px rgba(255, 255, 255, 0.68);
+  border-radius: 14px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .ghost-btn,
+:root[data-ui-theme="soft-sculpt"] .secondary-btn,
+:root[data-ui-theme="soft-sculpt"] .primary-btn,
+:root[data-ui-theme="soft-sculpt"] .danger-btn,
+:root[data-ui-theme="soft-sculpt"] .nav-btn,
+:root[data-ui-theme="soft-sculpt"] .mini-utility-btn {
+  font-size: 0.84rem;
+}
+
+.month-nav button {
+  width: 32px;
+  height: 32px;
+  background: #fffaf1;
+  border: 1px solid var(--line);
+  font-size: 1.02rem;
+}
+
+.ghost-btn,
+.secondary-btn,
+.nav-btn {
+  background: #fffaf1;
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+
+.nav-btn.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: rgba(17, 94, 89, 0.3);
+}
+
+:root[data-ui-theme="soft-sculpt"] .nav-btn.is-active,
+:root[data-ui-theme="soft-sculpt"] .tag-chip-button.is-ghost:hover {
+  background: transparent;
+  color: #555b6e;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.primary-btn {
+  background: var(--accent);
+  color: #fff;
+}
+
+.danger-btn {
+  background: var(--danger);
+  color: #fff;
+}
+
+:root[data-ui-theme="soft-sculpt"] .primary-btn {
+  background: #eef3f8;
+  color: #5f6f86;
+}
+
+:root[data-ui-theme="soft-sculpt"] .danger-btn {
+  background: #f2e4e4;
+  color: #b16d77;
+}
+
+.ghost-btn:hover,
+.secondary-btn:hover,
+.primary-btn:hover,
+.danger-btn:hover,
+.month-nav button:hover,
+.nav-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(43, 36, 31, 0.12);
+}
+
+.segmented-control {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+/* 顶部视图导航：切换 database 的不同读写视角。 */
+.workspace-topbar {
+  /* 右侧顶部导航壳层。
+     真实的对齐参数已经统一收口到 :is(.sidebar-topbar, .workspace-topbar) 里，
+     这里保留的是视觉皮肤，不再单独写会影响基线的留白。 */
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.32), rgba(255, 252, 246, 0.18));
+  border-bottom: 1px solid rgba(91, 70, 50, 0.08);
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.22);
+  backdrop-filter: none;
+}
+
+:root[data-ui-theme="soft-sculpt"] {
+  --nav-shell-top-offset: var(--panel-padding);
+}
+
+:root[data-ui-theme="soft-sculpt"] :is(.workspace-topbar, .sidebar-topbar) {
+  /* 右侧顶部第一行的外层留白：
+     左右两边顶部父层现在都自己承载相同的顶部/横向留白，
+     外层大卡片不再各自额外塞一套 padding。 */
+  background: transparent;
+  border-bottom: 0;
+  padding: var(--nav-shell-top-offset) var(--nav-shell-inline-padding) 0;
+  box-shadow: none;
+}
+
+:root[data-ui-theme="soft-sculpt"] .sidebar-main {
+  /* 左侧 AI 工作区和顶部导航分开管理留白，避免再把对齐逻辑混回 sidebar 外层。 */
+  padding: clamp(8px, 0.9vw, 12px) var(--nav-shell-inline-padding) 0;
+}
+
+:root[data-ui-theme="soft-sculpt"] .status-line {
+  /* 底部状态行独立留白，避免为了它去重新给整个 sidebar 加 padding。 */
+  padding: 8px var(--nav-shell-inline-padding) var(--panel-padding);
+}
+
+:root[data-ui-theme="soft-sculpt"] .workspace {
+  margin-left: 0;
+}
+
+:root[data-ui-theme="soft-sculpt"] .workspace-body {
+  /* 右侧主内容区的总内边距。
+     这里的第一个值控制“月份条/今天按钮”等第二层工具条离顶部的距离。 */
+  padding: clamp(8px, 0.9vw, 12px) clamp(6px, 0.8vw, 10px) clamp(6px, 0.9vw, 10px);
+  min-height: 0;
+  overflow: hidden;
+}
+
+:root[data-ui-theme="soft-sculpt"] .view-stage {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  border-radius: 0;
+  padding: 0;
+}
+
+.topbar-layout {
+  /* 右侧顶部第一层容器：
+     承载“日/月/周/待办”滑槽和右上角标签按钮。 */
+}
+
+.top-view-nav {
+  /* 右侧顶部大滑槽轨道。 */
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  overflow: hidden;
+  min-height: var(--toolbar-rail-height);
+  padding: 2px;
+  border-radius: 999px;
+  background-color: #e0e5ec;
+  box-shadow:
+    inset 4px 4px 8px rgba(163, 177, 198, 0.8),
+    inset -4px -4px 8px rgba(255, 255, 255, 0.5);
+}
+
+.top-view-highlight {
+  position: absolute;
+  top: 2px;
+  left: 0;
+  height: calc(100% - 4px);
+  width: var(--top-view-highlight-width, 74px);
+  border-radius: 999px;
+  background-color: #f0f4f7;
+  box-shadow:
+    4px 4px 8px rgba(163, 177, 198, 0.6),
+    -4px -4px 8px rgba(255, 255, 255, 0.8);
+  transform: translateX(var(--top-view-highlight-x, 0px));
+  transition: transform 300ms cubic-bezier(0.4, 0, 0.2, 1), width 300ms cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+}
+
+.top-view-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.top-view-nav::-webkit-scrollbar-thumb {
+  display: none;
+}
+
+.top-view-nav .nav-btn {
+  /* 右侧大滑槽内部按钮。 */
+  flex: 1 1 0;
+  min-width: clamp(78px, 7vw, 92px);
+  min-height: var(--toolbar-pill-height);
+  padding: 0 var(--toolbar-pill-padding);
+  font-size: clamp(0.76rem, 0.78vw, 0.82rem);
+  font-weight: 600;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  position: relative;
+  z-index: 10;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  color: #a3b1c6;
+  transition: color 300ms ease;
+  border-radius: 999px;
+}
+
+.topbar-utilities {
+  /* 右上角“标签筛选/标签管理”这一组按钮容器。 */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+:root[data-ui-theme="soft-sculpt"] #tag-filter-trigger,
+:root[data-ui-theme="soft-sculpt"] #open-tag-manager-btn,
+:root[data-ui-theme="soft-sculpt"] .sidebar-settings-btn {
+  /* 顶部所有辅助按钮统一高度，保证它们和滑槽内部按钮共享同一条视觉基线。 */
+  min-height: var(--toolbar-pill-height);
+  padding-block: 0;
+}
+
+:root[data-ui-theme="soft-sculpt"] .toolbar-actions {
+  gap: 12px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .selected-date-label {
+  padding-right: 6px;
+  font-size: 0.82rem;
+}
+
+:root[data-ui-theme="soft-sculpt"] .top-view-nav {
+  background-color: #e0e5ec;
+  border: 0;
+  box-shadow:
+    inset 4px 4px 8px rgba(163, 177, 198, 0.8),
+    inset -4px -4px 8px rgba(255, 255, 255, 0.5);
+}
+
+:root[data-ui-theme="soft-sculpt"] .top-view-nav .nav-btn.is-active {
+  color: #555b6e;
+}
+
+:root[data-ui-theme="soft-sculpt"] .top-view-nav .nav-btn:hover:not(.is-active) {
+  color: #8897ab;
+}
+
+:root[data-ui-theme="soft-sculpt"] .top-view-nav .nav-btn:not(.is-active) {
+  background: transparent;
+  box-shadow: none;
+}
+
+:root[data-ui-theme="soft-sculpt"] .sidebar-pane-nav {
+  background-color: #e0e5ec;
+  box-shadow:
+    inset 4px 4px 8px rgba(163, 177, 198, 0.8),
+    inset -4px -4px 8px rgba(255, 255, 255, 0.5);
+}
+
+:root[data-ui-theme="soft-sculpt"] .sidebar-pane-highlight {
+  background-color: #f0f4f7;
+  box-shadow:
+    4px 4px 8px rgba(163, 177, 198, 0.6),
+    -4px -4px 8px rgba(255, 255, 255, 0.8);
+}
+
+:root[data-ui-theme="soft-sculpt"] .sidebar-pane-nav .nav-btn.is-active {
+  color: #555b6e;
+}
+
+:root[data-ui-theme="soft-sculpt"] .sidebar-pane-nav .nav-btn:not(.is-active) {
+  background: transparent;
+  box-shadow: none;
+  color: #9ba8bb;
+}
+
+:root[data-ui-theme="soft-sculpt"] .month-nav {
+  gap: 6px;
+  min-height: 44px;
+  padding: 2px;
+  border-radius: 13px;
+  background: #e0e5ec;
+  box-shadow:
+    3px 3px 6px rgba(163, 177, 198, 0.34),
+    -3px -3px 6px rgba(255, 255, 255, 0.56);
+}
+
+:root[data-ui-theme="soft-sculpt"] .month-nav button {
+  width: 22px;
+  height: 22px;
+  border-radius: 8px;
+  background: transparent;
+  border: 0;
+  color: #6d7b8f;
+  box-shadow: none;
+  font-size: 0.94rem;
+}
+
+:root[data-ui-theme="soft-sculpt"] .month-nav h2,
+:root[data-ui-theme="soft-sculpt"] #week-label,
+:root[data-ui-theme="soft-sculpt"] #day-label {
+  min-width: 160px;
+  min-height: 28px;
+  text-align: center;
+  padding: 0 10px;
+  color: #4e5a6c;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.03em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+:root[data-ui-theme="soft-sculpt"] .month-nav button:hover {
+  transform: none;
+  background: #eef3f8;
+  box-shadow:
+    4px 4px 8px rgba(163, 177, 198, 0.38),
+    -4px -4px 8px rgba(255, 255, 255, 0.62);
+}
+
+:root[data-ui-theme="soft-sculpt"] #current-day-btn,
+:root[data-ui-theme="soft-sculpt"] #today-btn,
+:root[data-ui-theme="soft-sculpt"] #current-week-btn {
+  min-height: 34px;
+  padding: 0 16px;
+  border-radius: 12px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+:root[data-ui-theme="soft-sculpt"] .tag-filter-panel,
+:root[data-ui-theme="soft-sculpt"] .tag-inline-panel,
+:root[data-ui-theme="soft-sculpt"] .event-detail-popover {
+  background: #e0e5ec;
+  border: 0;
+  box-shadow:
+    8px 8px 16px rgba(163, 177, 198, 0.45),
+    -8px -8px 16px rgba(255, 255, 255, 0.78);
+  border-radius: 18px;
+}
+
+.tag-filter-picker {
+  position: relative;
+  z-index: 8;
+}
+
+.tag-filter-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 24;
+  width: min(320px, calc(100vw - 24px));
+  max-height: 280px;
+  overflow: auto;
+  padding: 10px;
+  border-radius: 16px;
+  background: rgba(255, 250, 241, 0.98);
+  border: 1px solid rgba(91, 70, 50, 0.08);
+  box-shadow: 0 18px 44px rgba(43, 36, 31, 0.16);
+}
+
+.tag-filter-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.tag-filter-options {
+  display: grid;
+  gap: 8px;
+}
+
+.tag-filter-group {
+  display: grid;
+  gap: 6px;
+}
+
+.tag-filter-group-title {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.tag-filter-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+  padding: 7px 8px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.tag-filter-option input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.tag-filter-option-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tag-filter-option-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tag-filter-option-count {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.tag-filter-label {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.tag-manager-panel {
+  max-width: 860px;
+}
+
+.tag-manager-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.tag-manager-list {
+  display: grid;
+  gap: 10px;
+}
+
+.tag-manager-item {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(81, 60, 42, 0.08);
+}
+
+.tag-manager-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tag-manager-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tag-manager-name {
+  font-weight: 600;
+}
+
+.tag-manager-count {
+  color: var(--muted);
+  font-size: 0.83rem;
+}
+
+.tag-color-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(81, 60, 42, 0.14);
+  flex: 0 0 auto;
+}
+
+.tag-manager-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tag-manager-actions input[type="color"] {
+  width: 34px;
+  min-width: 34px;
+  height: 30px;
+  padding: 3px;
+  border-radius: 10px;
+}
+
+@media (max-width: 880px) {
+  .tag-manager-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* month/day/week 共用的日历网格基础语言。 */
+.calendar-weekdays,
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.calendar-weekdays {
+  margin-top: 12px;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-weekdays {
+  margin-top: 8px;
+  margin-bottom: 2px;
+  font-size: 0.78rem;
+}
+
+.calendar-weekdays div {
+  padding: 6px 8px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-weekdays div {
+  padding: 3px 6px;
+}
+
+.calendar-grid {
+  gap: 8px;
+}
+
+.calendar-month-scroller {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 18px;
+  max-height: calc(100vh - 210px);
+  overflow: auto;
+  padding-right: 6px;
+  align-content: start;
+}
+
+.month-section {
+  display: grid;
+  gap: 10px;
+}
+
+.month-section-title {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.month-section-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.month-week-row {
+  position: relative;
+}
+
+.month-week-grid {
+  position: relative;
+  z-index: 1;
+}
+
+.month-week-bars {
+  position: absolute;
+  top: 34px;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-auto-rows: 18px;
+  row-gap: 2px;
+  pointer-events: none;
+}
+
+.calendar-day {
+  min-height: 112px;
+  background: rgba(255, 255, 255, 0.65);
+  border: 1px solid rgba(81, 60, 42, 0.08);
+  border-radius: 16px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+}
+
+.calendar-day-header {
+  cursor: pointer;
+}
+
+.month-bar-slot {
+  min-height: var(--month-bar-slot-height, 0px);
+}
+
+.month-inline-chip {
+  justify-content: flex-start;
+  width: 100%;
+  border: 0;
+  cursor: pointer;
+}
+
+.month-span-bar {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 8px;
+  border: 0;
+  border-left: 3px solid var(--record-accent, var(--accent));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--record-accent, var(--accent)) 16%, white);
+  color: var(--record-accent-text, #134743);
+  font-size: 0.72rem;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.month-span-bar.is-quick-editable {
+  cursor: text;
+}
+
+.month-span-bar.is-editing {
+  padding: 0;
+  background: transparent;
+  border-left-width: 4px;
+  overflow: visible;
+}
+
+.month-quick-entry-input {
+  width: 100%;
+  min-width: 0;
+  height: 18px;
+  padding: 0 8px;
+  border: 0;
+  border-left: 4px solid var(--record-accent, var(--accent));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--record-accent, var(--accent)) 16%, white);
+  color: var(--record-accent-text, #134743);
+  font-size: 0.72rem;
+  line-height: 18px;
+  box-shadow: none;
+}
+
+.month-quick-entry-input:focus {
+  outline: none;
+  border-color: var(--record-accent, var(--accent));
+}
+
+.month-span-bar.is-continued-left {
+  border-top-left-radius: 8px;
+  border-bottom-left-radius: 8px;
+}
+
+.month-span-bar.is-continued-right {
+  border-top-right-radius: 8px;
+  border-bottom-right-radius: 8px;
+}
+
+.month-span-meta {
+  margin-left: auto;
+  color: color-mix(in srgb, var(--record-accent-text, #134743) 68%, white);
+  font-size: 0.66rem;
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-day,
+:root[data-ui-theme="soft-sculpt"] .summary-stat,
+:root[data-ui-theme="soft-sculpt"] .summary-note,
+:root[data-ui-theme="soft-sculpt"] .draft-item,
+:root[data-ui-theme="soft-sculpt"] .daily-event-item,
+:root[data-ui-theme="soft-sculpt"] .trace-block,
+:root[data-ui-theme="soft-sculpt"] .week-all-day-item,
+:root[data-ui-theme="soft-sculpt"] .tag-manager-item,
+:root[data-ui-theme="soft-sculpt"] .runtime-log-item {
+  background: var(--step-top-raised);
+  border: 0;
+  box-shadow: 4px 4px 8px rgba(163, 177, 198, 0.34), -4px -4px 8px rgba(255, 255, 255, 0.56);
+  border-radius: 16px;
+  opacity: 1;
+}
+
+.calendar-day:hover {
+  transform: translateY(-1px);
+  border-color: rgba(17, 94, 89, 0.24);
+}
+
+.calendar-day.is-other-month {
+  opacity: 0.5;
+}
+
+.calendar-day.is-selected {
+  background: linear-gradient(180deg, rgba(211, 239, 233, 0.9), rgba(255, 255, 255, 0.75));
+  border-color: rgba(17, 94, 89, 0.38);
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-day.is-selected {
+  background: #eef3f8;
+  border-color: transparent;
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-grid {
+  gap: 10px;
+  padding: 12px;
+  border-radius: 22px;
+  background: var(--nui-inset-surface);
+  box-shadow: var(--nui-dark-inset-shadow), var(--nui-dark-inset-light);
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-month-scroller {
+  gap: 20px;
+  max-height: calc(100vh - 208px);
+  padding: 10px;
+  border-radius: 22px;
+  background: #edf4fb;
+  box-shadow: var(--nui-dark-inset-shadow), var(--nui-dark-inset-light);
+  scrollbar-width: none;
+  overscroll-behavior: contain;
+  /* 这里的滚动位置由 monthScroll 手动恢复。
+     禁用浏览器自己的 scroll anchoring，避免 DOM 重建时双重补偿导致跳动。 */
+  overflow-anchor: none;
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-month-scroller::-webkit-scrollbar {
+  display: none;
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-month-scroller::-webkit-scrollbar-track {
+  background: #edf4fb;
+  border-radius: 999px;
+  box-shadow:
+    inset 2px 2px 3px rgba(163, 177, 198, 0.62),
+    inset -2px -2px 3px rgba(255, 255, 255, 0.42);
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-month-scroller::-webkit-scrollbar-thumb {
+  border-radius: 2px;
+  background: linear-gradient(180deg, #7b8799 0%, #646f80 100%);
+  border: 0;
+  min-height: 48px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .month-section {
+  gap: 8px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .month-section-title {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #53647d;
+  padding: 2px 2px 0;
+}
+
+:root[data-ui-theme="soft-sculpt"] .month-section-grid {
+  gap: 0;
+  background: rgba(207, 216, 228, 0.74);
+  border-radius: 0;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(207, 216, 228, 0.78);
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-month-scroller .month-section {
+  gap: 12px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-month-scroller .calendar-day {
+  min-height: 128px;
+  margin: 0;
+  padding: 8px 10px 10px;
+  border: 0;
+  border-radius: 0;
+  background: #f9fbff;
+  box-shadow: none;
+  opacity: 1;
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-month-scroller .calendar-day:not(:nth-child(7n)) {
+  border-right: 1px solid rgba(207, 216, 228, 0.78);
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-month-scroller .calendar-day:nth-child(n + 8) {
+  border-top: 1px solid rgba(207, 216, 228, 0.78);
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-month-scroller .calendar-day:hover {
+  transform: none;
+  background: #f3f8fe;
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-month-scroller .calendar-day.is-other-month {
+  background: #f5f9fd;
+  opacity: 1;
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-month-scroller .calendar-day.is-selected {
+  background: #eef5fc;
+}
+
+:root[data-ui-theme="soft-sculpt"] .month-week-bars {
+  top: 38px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .month-inline-chip,
+:root[data-ui-theme="soft-sculpt"] .month-span-bar {
+  box-shadow: none;
+}
+
+:root[data-ui-theme="soft-sculpt"] .month-quick-entry-input {
+  background: color-mix(in srgb, var(--record-accent, var(--accent)) 16%, #f6f9fc);
+  color: var(--record-accent-text, #556070);
+  box-shadow: inset 1px 1px 2px rgba(163, 177, 198, 0.42);
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-month-scroller .calendar-day.is-today {
+  box-shadow: inset 0 0 0 1px rgba(107, 123, 147, 0.42);
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-month-scroller .calendar-day-header {
+  align-items: flex-start;
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-month-scroller .calendar-day-header .chip {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(229, 237, 247, 0.96);
+  box-shadow: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-month-scroller .day-events {
+  gap: 4px;
+}
+
+:root[data-ui-theme="soft-sculpt"] #month-view .calendar-toolbar,
+:root[data-ui-theme="soft-sculpt"] #week-view .calendar-toolbar,
+:root[data-ui-theme="soft-sculpt"] #day-view .calendar-toolbar,
+:root[data-ui-theme="soft-sculpt"] #todo-view .panel-header:first-child {
+  /* 第二层工具条和下面内容区之间的距离。 */
+  margin-bottom: 10px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .calendar-panel,
+:root[data-ui-theme="soft-sculpt"] .panel {
+  padding: 12px;
+}
+
+.calendar-day.is-today {
+  box-shadow: inset 0 0 0 1px rgba(17, 94, 89, 0.3);
+}
+
+.calendar-day-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+}
+
+.day-events,
+.chat-history,
+.draft-list,
+.daily-event-list,
+.trace-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 标签、事件气泡和对话气泡都使用圆角芯片语言，保持轻量信息感。 */
+.event-chip,
+.todo-chip,
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 0.74rem;
+  background: var(--record-accent-soft, var(--accent-soft));
+  color: var(--record-accent-text, #134743);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border: 1px solid color-mix(in srgb, var(--record-accent-border, var(--accent)) 28%, transparent);
+}
+
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tag-chip {
+  background: var(--tag-bg, var(--accent-soft));
+  color: var(--tag-text, #134743);
+  border: 1px solid var(--tag-border, rgba(17, 94, 89, 0.16));
+}
+
+.tag-chip-button {
+  cursor: pointer;
+  appearance: none;
+  font: inherit;
+}
+
+.tag-chip-button.is-ghost {
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--text);
+  border: 1px dashed rgba(81, 60, 42, 0.18);
+}
+
+.tag-inline-control {
+  display: block;
+  width: 100%;
+}
+
+.tag-inline-main {
+  position: relative;
+  min-width: 0;
+}
+
+.tag-inline-trigger {
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(81, 60, 42, 0.1);
+  background: rgba(255, 255, 255, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  text-align: left;
+}
+
+:root[data-ui-theme="soft-sculpt"] textarea,
+:root[data-ui-theme="soft-sculpt"] input,
+:root[data-ui-theme="soft-sculpt"] select,
+:root[data-ui-theme="soft-sculpt"] .tag-inline-trigger {
+  background-color: #e0e5ec;
+  border: 0;
+  box-shadow: inset 4px 4px 8px rgba(163, 177, 198, 0.5), inset -4px -4px 8px rgba(255, 255, 255, 0.7);
+  border-radius: 14px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .chat-message,
+:root[data-ui-theme="soft-sculpt"] .chat-attachment-item {
+  background: #edf3f8;
+  border: 0;
+  box-shadow: 4px 4px 8px rgba(163, 177, 198, 0.25), -4px -4px 8px rgba(255, 255, 255, 0.46);
+  border-radius: 12px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .chat-message.user,
+:root[data-ui-theme="soft-sculpt"] .chat-message.assistant.ai,
+:root[data-ui-theme="soft-sculpt"] .chat-message.assistant.bot {
+  background: #eef4f9;
+}
+
+:root[data-ui-theme="soft-sculpt"] .event-chip,
+:root[data-ui-theme="soft-sculpt"] .tag-chip {
+  /* 月视图里的事项胶囊统一用稳定浅底，不再叠加渐变。
+     这样同一标签色落在不同日期格背景上时，明度会更一致。 */
+  background: color-mix(in srgb, var(--record-accent, var(--accent)) 28%, #ffffff);
+  border-color: color-mix(in srgb, var(--record-accent-border, var(--record-accent, var(--accent))) 42%, white);
+  color: var(--record-accent-text, #134743);
+}
+
+.tag-inline-summary {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.tag-inline-summary.empty-state {
+  color: var(--muted);
+  flex-wrap: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag-inline-summary-chip {
+  font-size: 0.76rem;
+  padding: 3px 8px;
+}
+
+.tag-inline-caret {
+  flex: none;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.tag-inline-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 18;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(81, 60, 42, 0.12);
+  background: rgba(255, 250, 241, 0.98);
+  box-shadow: 0 18px 44px rgba(43, 36, 31, 0.14);
+}
+
+.tag-inline-options {
+  max-height: 180px;
+  overflow: auto;
+  display: grid;
+  gap: 6px;
+}
+
+.tag-inline-option {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 18px 10px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(81, 60, 42, 0.08);
+  background: rgba(255, 255, 255, 0.72);
+  text-align: left;
+}
+
+.tag-inline-option.is-active {
+  border-color: rgba(17, 94, 89, 0.28);
+  background: rgba(211, 239, 233, 0.4);
+}
+
+.tag-inline-option-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  border: 1px solid rgba(81, 60, 42, 0.12);
+  color: var(--accent);
+  font-size: 0.76rem;
+}
+
+.tag-inline-option-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--tag-dot, #115e59);
+}
+
+.tag-inline-option-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag-inline-create {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.tag-inline-entry {
+  margin: 0;
+  min-width: 0;
+}
+
+.tag-inline-create-btn {
+  min-width: 72px;
+  padding-inline: 10px;
+}
+
+.tag-color-picker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.compact-tag-color-picker {
+  justify-content: center;
+}
+
+.tag-color-trigger {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid rgba(81, 60, 42, 0.12);
+  background: var(--tag-color-current, #115e59);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.78);
+  padding: 0;
+}
+
+.tag-color-trigger:hover {
+  transform: translateY(-1px);
+}
+
+.field-span-full {
+  grid-column: 1 / -1;
+}
+
+.tag-color-palette {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 14;
+  width: 152px;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+  padding: 10px;
+  border-radius: 14px;
+  background: rgba(255, 250, 241, 0.98);
+  border: 1px solid rgba(81, 60, 42, 0.1);
+  box-shadow: 0 18px 44px rgba(43, 36, 31, 0.16);
+}
+
+.tag-color-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  padding: 0;
+  border: 2px solid transparent;
+  background: var(--swatch);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+.tag-color-swatch.is-active {
+  border-color: rgba(43, 36, 31, 0.55);
+}
+
+/* 聊天区在 v3 中承担“秘书对话轨迹”，区分 user / ai / bot 三类身份。 */
+.chat-history {
+  min-height: 220px;
+  max-height: 360px;
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+  padding-right: 6px;
+  position: relative;
+}
+
+:root[data-ui-theme="soft-sculpt"] .chat-history,
+:root[data-ui-theme="soft-sculpt"] #chat-input,
+:root[data-ui-theme="soft-sculpt"] .chat-attachment-list {
+  background-color: var(--nui-inset-surface);
+  border: 0;
+  box-shadow:
+    inset 3px 3px 6px rgba(163, 177, 198, 0.9),
+    inset -3px -3px 6px rgba(200, 210, 225, 0.5);
+  border-radius: 16px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .chat-history,
+:root[data-ui-theme="soft-sculpt"] .chat-attachment-list {
+  padding: 10px;
+}
+
+:root[data-ui-theme="soft-sculpt"] #chat-input {
+  padding: 10px 12px;
+  color: #555b6e;
+  font-size: 0.84rem;
+  resize: none;
+}
+
+.chat-compose {
+  display: grid;
+  gap: 3px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .assistant-chat-panel .chat-compose {
+  gap: 3px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .assistant-chat-panel {
+  background: #e0e5ec;
+  border-radius: 24px;
+  padding: 12px;
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  row-gap: 3px;
+  box-shadow:
+    5px 5px 10px rgba(163, 177, 198, 0.48),
+    -5px -5px 10px rgba(255, 255, 255, 0.68);
+}
+
+:root[data-ui-theme="soft-sculpt"] .assistant-chat-panel .panel-header,
+:root[data-ui-theme="soft-sculpt"] .assistant-chat-panel .chat-compose-footer {
+  position: relative;
+  z-index: 1;
+}
+
+:root[data-ui-theme="soft-sculpt"] .assistant-chat-panel .chat-history,
+:root[data-ui-theme="soft-sculpt"] .assistant-chat-panel .chat-attachment-list,
+:root[data-ui-theme="soft-sculpt"] .assistant-chat-panel #chat-input,
+:root[data-ui-theme="soft-sculpt"] .assistant-chat-panel #chat-intent {
+  color: #555b6e;
+}
+
+:root[data-ui-theme="soft-sculpt"] .assistant-chat-panel #chat-intent {
+  background-color: #f1f5f9;
+  border: 0;
+  box-shadow:
+    inset 3px 3px 6px rgba(163, 177, 198, 0.9),
+    inset -3px -3px 6px rgba(200, 210, 225, 0.5);
+}
+
+:root[data-ui-theme="soft-sculpt"] .assistant-chat-panel .chat-history {
+  min-height: 0;
+  max-height: none;
+  position: relative;
+  overflow: auto;
+  background-color: var(--nui-inset-surface);
+  box-shadow:
+    inset 3px 3px 6px rgba(163, 177, 198, 0.82),
+    inset -3px -3px 6px rgba(200, 210, 225, 0.42);
+  overscroll-behavior: contain;
+}
+
+:root[data-ui-theme="soft-sculpt"] .assistant-chat-panel .chat-attachment-list {
+  min-height: 64px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .chat-history::-webkit-scrollbar,
+:root[data-ui-theme="soft-sculpt"] .chat-attachment-list::-webkit-scrollbar,
+:root[data-ui-theme="soft-sculpt"] .workspace-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .chat-history::-webkit-scrollbar-track,
+:root[data-ui-theme="soft-sculpt"] .chat-attachment-list::-webkit-scrollbar-track,
+:root[data-ui-theme="soft-sculpt"] .workspace-body::-webkit-scrollbar-track {
+  background: var(--nui-inset-surface);
+  border-radius: 999px;
+  box-shadow:
+    inset 3px 3px 6px rgba(163, 177, 198, 0.68),
+    inset -3px -3px 6px rgba(255, 255, 255, 0.52);
+}
+
+:root[data-ui-theme="soft-sculpt"] .chat-history::-webkit-scrollbar-thumb,
+:root[data-ui-theme="soft-sculpt"] .chat-attachment-list::-webkit-scrollbar-thumb,
+:root[data-ui-theme="soft-sculpt"] .workspace-body::-webkit-scrollbar-thumb,
+:root[data-ui-theme="soft-sculpt"] .calendar-month-scroller::-webkit-scrollbar-thumb {
+  border-radius: 2px;
+  background: linear-gradient(180deg, #7b8799 0%, #646f80 100%);
+  border: 0;
+  min-height: 48px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .chat-history::-webkit-scrollbar-track,
+:root[data-ui-theme="soft-sculpt"] .chat-attachment-list::-webkit-scrollbar-track,
+:root[data-ui-theme="soft-sculpt"] .workspace-body::-webkit-scrollbar-track,
+:root[data-ui-theme="soft-sculpt"] .calendar-month-scroller::-webkit-scrollbar-track {
+  border-radius: 999px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .chat-record-card {
+  background: #edf3f8;
+  box-shadow: 4px 4px 8px rgba(163, 177, 198, 0.22), -4px -4px 8px rgba(255, 255, 255, 0.42);
+}
+
+:root[data-ui-theme="soft-sculpt"] .chat-message,
+:root[data-ui-theme="soft-sculpt"] .chat-record-card,
+:root[data-ui-theme="soft-sculpt"] .chat-attachment-item {
+  background: #f6f9fc;
+}
+
+.chat-compose-footer {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.chat-intent-inline {
+  display: inline-grid;
+  gap: 4px;
+  min-width: 92px;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.chat-intent-inline select {
+  min-width: 0;
+}
+
+.chat-compose-footer .panel-tip {
+  margin: 0;
+  flex: 1;
+}
+
+.compose-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+:root[data-ui-theme="soft-sculpt"] .chat-compose-footer {
+  justify-content: flex-end;
+  align-items: flex-end;
+}
+
+:root[data-ui-theme="soft-sculpt"] .compose-actions {
+  justify-content: flex-end;
+  width: auto;
+}
+
+:root[data-ui-theme="soft-sculpt"] .chat-intent-inline {
+  margin-right: auto;
+}
+
+:root[data-ui-theme="soft-sculpt"] .chat-intent-inline select {
+  padding: 6px 10px;
+  min-height: 34px;
+  font-size: 0.82rem;
+}
+
+:root[data-ui-theme="soft-sculpt"] #send-chat-btn {
+  min-width: 104px;
+  background: #ef4f4f;
+  color: #fff7f7;
+  box-shadow:
+    6px 6px 12px rgba(203, 98, 98, 0.36),
+    -4px -4px 10px rgba(255, 255, 255, 0.36);
+}
+
+:root[data-ui-theme="soft-sculpt"] #send-chat-btn:hover {
+  background: #f65c5c;
+}
+
+:root[data-ui-theme="soft-sculpt"] .sidebar-resize-handle::after {
+  content: "";
+  position: absolute;
+  inset: 16px 6px;
+  border-radius: 999px;
+  background: #edf2f7;
+  box-shadow:
+    inset 3px 3px 6px rgba(163, 177, 198, 0.72),
+    inset -3px -3px 6px rgba(255, 255, 255, 0.54);
+}
+
+:root[data-ui-theme="soft-sculpt"] .sidebar-resize-handle::before {
+  z-index: 1;
+  width: 4px;
+  height: 72px;
+  background: linear-gradient(180deg, #738196 0%, #5f6c7d 100%);
+}
+
+.chat-attachment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 120px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.chat-attachment-item {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-strong);
+  padding: 8px 10px;
+  display: grid;
+  gap: 4px;
+}
+
+.chat-attachment-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.chat-attachment-title {
+  font-weight: 600;
+}
+
+.chat-attachment-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.chat-attachment-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+/* AI 与机器人都属于 assistant，但视觉上刻意区分：
+   - AI：实线、偏柔和渐变
+   - bot：虚线、偏工具提示感 */
+.chat-message {
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: var(--surface-strong);
+  border: 1px solid var(--line);
+  max-width: 92%;
+  box-shadow: 0 8px 22px rgba(61, 42, 26, 0.05);
+}
+
+.chat-message.user {
+  background: #f4eee1;
+  margin-left: auto;
+}
+
+.chat-message.assistant.ai {
+  background: linear-gradient(180deg, rgba(222, 244, 239, 0.95), rgba(255, 250, 241, 0.96));
+  border-color: rgba(15, 118, 110, 0.18);
+}
+
+.chat-message.assistant.bot {
+  background: rgba(255, 250, 241, 0.96);
+  border-style: dashed;
+}
+
+.chat-role {
+  color: var(--muted);
+  font-size: 0.74rem;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.chat-message-body {
+  display: grid;
+  gap: 6px;
+  line-height: 1.5;
+  white-space: normal;
+}
+
+.chat-message-body p {
+  margin: 0;
+}
+
+.chat-record-card-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.chat-record-card {
+  width: 100%;
+  text-align: left;
+  border: 1px solid rgba(17, 94, 89, 0.16);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.78);
+  padding: 12px 14px;
+  display: grid;
+  gap: 8px;
+  cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+}
+
+.chat-record-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(17, 94, 89, 0.3);
+  box-shadow: 0 10px 22px rgba(17, 94, 89, 0.08);
+}
+
+.chat-record-card-top,
+.chat-record-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.chat-record-card-top strong {
+  font-size: 0.96rem;
+  color: #163a37;
+}
+
+.chat-record-card-top span,
+.chat-record-card-meta span {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.chat-record-card p {
+  margin: 0;
+  color: #38514d;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.detail-columns {
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  gap: 20px;
+}
+
+.event-form,
+.event-form label {
+  display: grid;
+  gap: 8px;
+}
+
+.event-form {
+  gap: 14px;
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.chip {
+  min-width: 28px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  text-align: center;
+  font-size: 0.76rem;
+}
+
+.draft-list,
+.daily-event-list,
+.trace-panel {
+  max-height: 300px;
+  overflow: auto;
+}
+
+.draft-sidebar-panel {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
+.draft-sidebar-panel .draft-list {
+  max-height: none;
+  min-height: 0;
+}
+
+.sidebar-pane-nav .chip {
+  min-width: 22px;
+  padding: 1px 5px;
+  font-size: 0.72rem;
+}
+
+.runtime-log-list {
+  display: grid;
+  gap: 8px;
+  max-height: 180px;
+  overflow: auto;
+  padding-right: 6px;
+}
+
+.runtime-log-item {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-strong);
+  padding: 9px 11px;
+  display: grid;
+  gap: 4px;
+}
+
+.runtime-log-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.runtime-log-message {
+  margin: 0;
+  line-height: 1.4;
+  word-break: break-word;
+  font-size: 0.8rem;
+}
+
+/* 日视图摘要卡负责把 database 中的单日状态压缩成可一眼扫读的摘要。 */
+.selected-day-summary {
+  min-height: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.summary-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.summary-stat {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface-strong);
+  min-height: 104px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+:root[data-ui-theme="soft-sculpt"] .summary-stat {
+  min-height: 112px;
+  padding: 14px 16px;
+}
+
+.summary-stat strong {
+  display: block;
+  font-size: 1.6rem;
+  margin-top: 4px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .summary-stat strong {
+  font-size: 1.95rem;
+}
+
+.summary-note {
+  border: 1px dashed rgba(17, 94, 89, 0.26);
+  border-radius: 18px;
+  padding: 12px 14px;
+  background: rgba(211, 239, 233, 0.22);
+  color: var(--muted);
+}
+
+.draft-item,
+.daily-event-item,
+.trace-block,
+.week-event,
+.week-all-day-item {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px;
+  background: var(--surface-strong);
+}
+
+.daily-event-item {
+  background: color-mix(in srgb, var(--record-accent, var(--surface-strong)) 7%, white);
+  cursor: pointer;
+}
+
+.daily-event-item.is-detail {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 20px;
+  cursor: default;
+  min-height: 0;
+  overflow: auto;
+}
+
+.daily-event-item.is-detail.event-detail-panel {
+  align-content: start;
+}
+
+.daily-event-item.is-detail .event-detail-popover-head,
+.daily-event-item.is-detail .event-detail-time-shell,
+.daily-event-item.is-detail .event-detail-inline-actions {
+  width: 100%;
+}
+
+.daily-event-item.is-detail .event-detail-ai-box {
+  /* 日视图详情面板需要让字段连续向下排布。
+     这里不能再用 auto 把 AI 区域顶到底部，否则中间会出现一大片错误留白。 */
+  margin-top: 0;
+}
+
+.daily-event-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.daily-event-head h3 {
+  margin: 0;
+}
+
+.daily-event-time {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.daily-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.daily-detail-block,
+.daily-detail-note {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.daily-detail-note {
+  align-self: stretch;
+  align-content: start;
+}
+
+.daily-detail-block strong,
+.daily-detail-note p {
+  margin: 0;
+}
+
+:root[data-ui-theme="soft-sculpt"] .daily-event-item.is-detail,
+:root[data-ui-theme="soft-sculpt"] .daily-detail-block,
+:root[data-ui-theme="soft-sculpt"] .daily-detail-note {
+  background: var(--nui-inset-surface);
+  box-shadow: var(--nui-dark-inset-shadow), var(--nui-dark-inset-light);
+}
+
+.draft-item h3,
+.daily-event-item h3,
+.trace-block h3 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.inline-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.empty-state {
+  color: var(--muted);
+  justify-content: center;
+  min-height: 80px;
+}
+
+.draft-actions,
+.daily-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.trace-block pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "SFMono-Regular", "Consolas", monospace;
+  font-size: 0.84rem;
+}
+
+.selected-date-label {
+  color: var(--muted);
+}
+
+/* week 视图强调连续时间轴，是 database 时间记录的空间化表达。 */
+.week-grid {
+  /* 这几个变量决定周视图整体骨架：
+     --week-time-gutter 是左侧时间轴宽度；
+     --week-day-width 是每一天的实际宽度。
+     如果你想让周视图更宽松或更紧凑，通常从这里开始调。 */
+  --week-time-gutter: 58px;
+  --week-day-width: 140px;
+  --week-all-day-height: 96px;
+  --week-hour-height: 48px;
+  --day-total-hours: 24;
+  margin-top: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(81, 60, 42, 0.08);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.78);
+  max-width: 100%;
+  height: calc(100vh - 220px);
+}
+
+:root[data-ui-theme="soft-sculpt"] .week-grid {
+  margin-top: 14px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 24px;
+  background: #e9eef4;
+  box-shadow: var(--nui-dark-inset-shadow), var(--nui-dark-inset-light);
+}
+
+.week-board {
+  display: grid;
+  grid-template-columns: var(--week-time-gutter) minmax(0, 1fr);
+  grid-template-rows: auto 8px minmax(0, 1fr);
+  align-items: stretch;
+  min-width: 0;
+  height: calc(100vh - 220px);
+}
+
+.week-corner-stack {
+  grid-column: 1;
+  grid-row: 1;
+  display: grid;
+  grid-template-rows: 60px var(--week-all-day-height);
+  min-width: 0;
+}
+
+.week-top-pane {
+  /* 蓝色区：只横向滚动，始终置顶，不参与竖向滚动。 */
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-rows: 60px var(--week-all-day-height);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  background: rgba(255, 255, 255, 0.74);
+  -webkit-overflow-scrolling: touch;
+}
+
+.week-time-pane {
+  /* 绿色区：只负责纵向时间轴滚动。 */
+  grid-column: 1;
+  grid-row: 3;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: rgba(255, 255, 255, 0.88);
+  scrollbar-width: none;
+  min-height: 0;
+}
+
+.week-scroll-body {
+  /* 黄色区：真正的主时间网格，同时承担横向无极滚动和纵向滚动。 */
+  grid-column: 2;
+  grid-row: 3;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: none;
+  background: rgba(255, 255, 255, 0.46);
+  -webkit-overflow-scrolling: touch;
+}
+
+:root[data-ui-theme="soft-sculpt"] .week-top-pane,
+:root[data-ui-theme="soft-sculpt"] .week-time-pane,
+:root[data-ui-theme="soft-sculpt"] .week-scroll-body {
+  background: rgba(248, 250, 253, 0.86);
+}
+
+:root[data-ui-theme="soft-sculpt"] .week-top-pane::-webkit-scrollbar,
+:root[data-ui-theme="soft-sculpt"] .week-time-pane::-webkit-scrollbar,
+:root[data-ui-theme="soft-sculpt"] .week-scroll-body::-webkit-scrollbar {
+  display: none;
+}
+
+.week-all-day-row.is-scrollable::-webkit-scrollbar,
+.day-all-day-strip.is-scrollable::-webkit-scrollbar {
+  width: 4px;
+}
+
+.week-all-day-row.is-scrollable::-webkit-scrollbar-track,
+.day-all-day-strip.is-scrollable::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(85, 91, 110, 0.12);
+}
+
+.week-all-day-row.is-scrollable::-webkit-scrollbar-thumb,
+.day-all-day-strip.is-scrollable::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(85, 91, 110, 0.58);
+}
+
+.week-resize-handle {
+  grid-column: 1 / span 2;
+  grid-row: 2;
+}
+
+.week-header-row,
+.week-all-day-row,
+.week-grid-surface {
+  display: grid;
+  grid-template-columns: repeat(var(--week-day-count, 7), minmax(0, var(--week-day-width)));
+  min-width: 100%;
+}
+
+.week-all-day-row {
+  position: relative;
+  min-height: var(--week-all-day-height);
+  height: var(--week-all-day-height);
+  overflow-x: hidden;
+  overflow-y: hidden;
+}
+
+.week-corner,
+.week-all-day-title,
+.week-time-labels {
+  border-right: 1px solid rgba(81, 60, 42, 0.08);
+}
+
+.week-header-cell {
+  /* 每天表头的高度、内边距、字距都在这里控制。
+     想让周视图顶部更像系统日历，通常就是调这一段，而不是去动卡片本身。 */
+  padding: 12px 8px 10px;
+  font-weight: 600;
+  min-height: 60px;
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  border-right: 1px solid rgba(81, 60, 42, 0.08);
+  min-width: 0;
+  cursor: pointer;
+}
+
+.week-header-cell:hover {
+  background: rgba(211, 239, 233, 0.22);
+}
+
+:root[data-ui-theme="soft-sculpt"] .week-header-cell:hover {
+  background: rgba(240, 244, 247, 0.82);
+}
+
+.week-header-main {
+  font-size: 0.9rem;
+  color: #24312f;
+}
+
+.week-header-date {
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+.week-corner {
+  background: rgba(255, 255, 255, 0.92);
+  min-height: 60px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .week-corner,
+:root[data-ui-theme="soft-sculpt"] .week-all-day-title,
+:root[data-ui-theme="soft-sculpt"] .week-time-labels {
+  background: transparent;
+}
+
+.week-all-day-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.92);
+  border-top: 1px solid rgba(81, 60, 42, 0.08);
+  border-bottom: 1px solid rgba(81, 60, 42, 0.08);
+  min-height: var(--week-all-day-height);
+}
+
+.week-all-day-row.is-scrollable {
+  overflow-y: scroll;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(85, 91, 110, 0.58) rgba(85, 91, 110, 0.12);
+  scrollbar-gutter: stable;
+}
+
+.week-all-day-content {
+  position: relative;
+  min-height: 100%;
+}
+
+.week-all-day-hit-grid,
+.week-all-day-bars {
+  display: grid;
+  grid-template-columns: repeat(var(--week-day-count, 7), minmax(0, var(--week-day-width)));
+  min-width: 100%;
+}
+
+.week-all-day-hit-grid {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+.week-all-day-bars {
+  position: relative;
+  z-index: 2;
+  grid-auto-rows: 18px;
+  row-gap: 2px;
+  padding: 4px 0;
+}
+
+.week-all-day-slot {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-right: 1px solid rgba(81, 60, 42, 0.08);
+  border-top: 1px solid rgba(81, 60, 42, 0.08);
+  border-bottom: 1px solid rgba(81, 60, 42, 0.08);
+  background: rgba(255, 255, 255, 0.9);
+  min-width: 0;
+}
+
+.week-time-labels {
+  position: relative;
+  min-height: calc(var(--day-total-hours, 24) * var(--week-hour-height, 48px));
+  background: rgba(255, 255, 255, 0.84);
+}
+
+.week-time-marker {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+}
+
+.week-time-marker span {
+  position: absolute;
+  top: -10px;
+  right: 10px;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.week-grid-surface {
+  position: relative;
+  min-height: calc(var(--day-total-hours, 24) * var(--week-hour-height, 48px));
+  cursor: crosshair;
+  user-select: none;
+  min-width: 0;
+  background-color: rgba(255, 255, 255, 0.86);
+  background:
+    repeating-linear-gradient(
+      to right,
+      rgba(81, 60, 42, 0.08) 0,
+      rgba(81, 60, 42, 0.08) 1px,
+      transparent 1px,
+      transparent calc(100% / var(--week-day-count, 7))
+    ),
+    repeating-linear-gradient(
+      to bottom,
+      rgba(81, 60, 42, 0.08) 0,
+      rgba(81, 60, 42, 0.08) 1px,
+      transparent 1px,
+      transparent 48px
+    ),
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent 23px,
+      rgba(81, 60, 42, 0.05) 23px,
+      rgba(81, 60, 42, 0.05) 24px,
+      transparent 24px,
+      transparent 48px
+    );
+}
+
+
+:root[data-ui-theme="soft-sculpt"] .week-header-cell,
+:root[data-ui-theme="soft-sculpt"] .week-corner,
+:root[data-ui-theme="soft-sculpt"] .week-all-day-title,
+:root[data-ui-theme="soft-sculpt"] .week-all-day-slot,
+:root[data-ui-theme="soft-sculpt"] .week-time-labels {
+  border-color: rgba(163, 177, 198, 0.22);
+}
+
+:root[data-ui-theme="soft-sculpt"] .week-all-day-slot {
+  background: rgba(248, 250, 253, 0.88);
+}
+
+:root[data-ui-theme="soft-sculpt"] .week-quick-entry-input {
+  background: color-mix(in srgb, var(--record-accent, var(--accent)) 16%, #f6f9fc);
+  color: var(--record-accent-text, #556070);
+  box-shadow: inset 1px 1px 2px rgba(163, 177, 198, 0.42);
+}
+
+:root[data-ui-theme="soft-sculpt"] .week-grid-surface {
+  background-color: rgba(250, 252, 255, 0.92);
+  background:
+    repeating-linear-gradient(
+      to right,
+      rgba(163, 177, 198, 0.24) 0,
+      rgba(163, 177, 198, 0.24) 1px,
+      transparent 1px,
+      transparent calc(100% / var(--week-day-count, 7))
+    ),
+    repeating-linear-gradient(
+      to bottom,
+      rgba(163, 177, 198, 0.18) 0,
+      rgba(163, 177, 198, 0.18) 1px,
+      transparent 1px,
+      transparent 48px
+    ),
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent 23px,
+      rgba(255, 255, 255, 0.18) 23px,
+      rgba(255, 255, 255, 0.18) 24px,
+      transparent 24px,
+      transparent 48px
+    );
+}
+
+.week-grid-surface.is-dragging {
+  background:
+    repeating-linear-gradient(
+      to right,
+      rgba(81, 60, 42, 0.08) 0,
+      rgba(81, 60, 42, 0.08) 1px,
+      transparent 1px,
+      transparent calc(100% / var(--week-day-count, 7))
+    ),
+    repeating-linear-gradient(
+      to bottom,
+      rgba(17, 94, 89, 0.12) 0,
+      rgba(17, 94, 89, 0.12) 1px,
+      transparent 1px,
+      transparent 48px
+    ),
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent 23px,
+      rgba(81, 60, 42, 0.05) 23px,
+      rgba(81, 60, 42, 0.05) 24px,
+      transparent 24px,
+      transparent 48px
+    );
+}
+
+.week-column-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: calc(100% / var(--week-day-count, 7));
+  border-right: 1px solid rgba(81, 60, 42, 0.08);
+  pointer-events: none;
+}
+
+.week-event-block,
+.week-selection-preview {
+  /* 这段定义了“周视图事项卡片”和“拖拽创建时的预览块”的共同基础盒模型：
+     - absolute: 因为它们都要精确贴在时间轴上
+     - border-radius / padding: 决定卡片整体观感
+     - overflow: 防止文字把小卡片撑坏 */
+  position: absolute;
+  border-radius: 10px;
+  padding: 7px 8px 6px;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.week-event-block {
+  /* 真正的事项卡片观感在这里：
+     - background: 用标签主色做轻微染色，不是纯实心块
+     - border-left: 左边色条，做成细长条，接近系统日历的标记方式
+     - box-shadow / backdrop-filter: 做一点点漂浮和玻璃感
+     如果你想继续往 Apple 的方向调，这里是最关键的一段。 */
+  background: color-mix(in srgb, var(--record-accent, var(--accent)) 11%, white);
+  color: var(--record-accent-text, #134743);
+  border-left: 2px solid var(--record-accent, var(--accent));
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--record-accent, var(--accent)) 8%, transparent);
+  backdrop-filter: blur(6px);
+  cursor: pointer;
+}
+
+/* 拖动已有事项时，原位卡片只保留一个淡淡的占位感，
+   避免用户误以为“有两张真实卡片”，同时又能知道自己是从哪里拖出来的。 */
+.week-event-block.is-drag-source,
+.day-event-block.is-drag-source {
+  opacity: 0.18;
+  pointer-events: none;
+}
+
+/* 拖拽预览块继续沿用真实卡片的视觉体系，但提高层级并关闭交互，
+   保证它只是一个视觉反馈层，不会再次吃掉 pointer。 */
+.week-event-block.is-drag-preview,
+.day-event-block.is-drag-preview {
+  pointer-events: none;
+  box-shadow:
+    0 12px 24px color-mix(in srgb, var(--record-accent, var(--accent)) 20%, rgba(27, 44, 63, 0.12)),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+:root[data-ui-theme="soft-sculpt"] .week-event-block {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--record-accent, var(--accent)) 24%, #ffffff) 0%,
+    color-mix(in srgb, var(--record-accent, var(--accent)) 38%, #fff6f3) 100%
+  );
+  border-left: 2px solid var(--record-accent, var(--accent));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    0 8px 14px color-mix(in srgb, var(--record-accent, var(--accent)) 18%, rgba(64, 78, 99, 0.08));
+  backdrop-filter: none;
+}
+
+.week-selection-preview {
+  background: rgba(211, 239, 233, 0.42);
+  border: 1px dashed rgba(17, 94, 89, 0.55);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.week-event-block h3,
+.week-selection-preview h3 {
+  /* 第一行标题。字号现在已经做得比以前小很多。
+     如果你觉得一屏里还是显示得不够多，优先继续减这里和 p 的字号，
+     不要先去砍时间轴高度。 */
+  margin: 0 0 2px;
+  font-size: 0.8rem;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.week-event-block p,
+.week-selection-preview p {
+  /* 标题下方的小字基础样式。
+     目前 week-event-time 和 week-event-location 都继承这里，再分别微调颜色。 */
+  margin: 0;
+  font-size: 0.68rem;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.week-event-block.is-compact {
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.week-event-block.is-compact h3 {
+  margin-bottom: 1px;
+  font-size: 0.76rem;
+}
+
+.week-event-time {
+  /* 时间这行会比地点更醒目一点，因为它是周视图里最重要的辅助信息。 */
+  color: color-mix(in srgb, var(--record-accent-text, #134743) 72%, white);
+}
+
+.week-event-location {
+  /* 地点是第三层信息，所以透明度再弱一点。
+     这样卡片很小时，即便只看标题和时间，也不会觉得信息顺序混乱。 */
+  color: color-mix(in srgb, var(--record-accent-text, #134743) 58%, white);
+}
+
+.week-event-block.is-compact .week-event-time {
+  font-size: 0.64rem;
+}
+
+.week-event-block.is-compact .week-event-location,
+.week-event-block.is-tight .week-event-location {
+  /* 卡片高度不够时先牺牲地点，不先牺牲标题和时间。
+     这是当前周视图信息优先级的明确设计：
+     标题 > 时间 > 地点。 */
+  display: none;
+}
+
+.week-event-block.is-tight .week-event-time {
+  font-size: 0.62rem;
+}
+
+.week-empty-hint {
+  position: absolute;
+  left: 20px;
+  top: 16px;
+  color: rgba(110, 98, 89, 0.72);
+  font-size: 0.9rem;
+}
+
+.week-event,
+.week-all-day-item {
+  display: flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 2px 6px;
+  line-height: 1.15;
+  font-size: 0.7rem;
+  background: var(--record-accent-soft, var(--accent-soft));
+  color: var(--record-accent-text, #134743);
+  border-left: 3px solid var(--record-accent, var(--accent));
+}
+
+.week-all-day-item {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  border-radius: 999px;
+}
+
+/* 周视图顶部全天条带必须和普通事项卡片一样，按记录自己的 tag / accent 着色。
+   soft-sculpt 主题上面那条通用 raised-card 规则会把它刷成统一灰色，
+   所以这里专门把背景颜色接回 record accent，不让主题通用面板色覆盖业务颜色。 */
+:root[data-ui-theme="soft-sculpt"] .week-all-day-item:not(.is-editing) {
+  background: var(--record-accent-soft, var(--accent-soft));
+  color: var(--record-accent-text, #556070);
+  box-shadow: none;
+}
+
+.week-all-day-item.is-quick-editable {
+  cursor: text;
+}
+
+.week-all-day-item.is-editing {
+  padding: 0;
+  background: transparent;
+  overflow: visible;
+}
+
+.week-all-day-item.is-continued-left {
+  border-top-left-radius: 8px;
+  border-bottom-left-radius: 8px;
+}
+
+.week-all-day-item.is-continued-right {
+  border-top-right-radius: 8px;
+  border-bottom-right-radius: 8px;
+}
+
+.week-quick-entry-input {
+  width: 100%;
+  min-width: 0;
+  height: 18px;
+  padding: 0 8px;
+  border: 0;
+  border-left: 3px solid var(--record-accent, var(--accent));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--record-accent, var(--accent)) 16%, white);
+  color: var(--record-accent-text, #134743);
+  font-size: 0.7rem;
+  line-height: 18px;
+  box-shadow: none;
+}
+
+.week-quick-entry-input:focus {
+  outline: none;
+  border-color: var(--record-accent, var(--accent));
+}
+
+.priority-high {
+  border-left: 4px solid #c46a2b;
+}
+
+.priority-low {
+  opacity: 0.75;
+}
+
+.todo-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.75fr) minmax(0, 1.25fr);
+  gap: 20px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .todo-layout {
+  gap: 24px;
+}
+
+:root[data-ui-theme="soft-sculpt"] #todo-view.view-panel,
+:root[data-ui-theme="soft-sculpt"] #month-view.view-panel,
+:root[data-ui-theme="soft-sculpt"] #week-view.view-panel,
+:root[data-ui-theme="soft-sculpt"] #day-view.view-panel {
+  padding-top: 2px;
+}
+
+.todo-quick-create {
+  align-self: start;
+}
+
+.todo-list-panel {
+  min-height: 100%;
+}
+
+.todo-item {
+  display: grid;
+  gap: 12px;
+}
+
+.todo-item.is-completed {
+  opacity: 0.68;
+}
+
+.todo-item.is-completed h3,
+.todo-item.is-completed p {
+  text-decoration: line-through;
+}
+
+.todo-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.todo-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.todo-check input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.day-modal {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.day-modal::backdrop {
+  background: rgba(43, 36, 31, 0.24);
+}
+
+.modal-panel {
+  width: min(760px, calc(100vw - 24px));
+  margin: auto;
+}
+
+.utility-modal-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.compact-panel-header {
+  margin-bottom: 10px;
+  align-items: center;
+}
+
+.mini-utility-btn {
+  border: 1px solid var(--line);
+  background: rgba(255, 250, 241, 0.95);
+  color: var(--text);
+  border-radius: 14px;
+  padding: 8px 8px;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .mini-utility-btn {
+  background: #e0e5ec;
+  border: 0;
+  box-shadow: 4px 4px 8px rgba(163, 177, 198, 0.4), -4px -4px 8px rgba(255, 255, 255, 0.62);
+}
+
+.mini-utility-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(43, 36, 31, 0.12);
+}
+
+:root[data-ui-theme="soft-sculpt"] .sidebar > .panel:not(.assistant-chat-panel) {
+  background: #e0e5ec;
+  box-shadow: 4px 4px 8px rgba(163, 177, 198, 0.36), -4px -4px 8px rgba(255, 255, 255, 0.58);
+}
+
+.settings-section {
+  display: grid;
+  gap: 10px;
+}
+
+.status-line {
+  font-size: 0.8rem;
+}
+
+.debug-section {
+  display: grid;
+  gap: 8px;
+}
+
+.debug-section h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.migration-notice-panel {
+  max-width: 640px;
+}
+
+.migration-notice-steps {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text);
+  display: grid;
+  gap: 6px;
+}
+
+.day-view-panel {
+  padding-bottom: 24px;
+  height: calc(100vh - (var(--shell-padding) * 2) - var(--toolbar-rail-height) - 18px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.day-view-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(340px, 1.08fr);
+  gap: 20px;
+  margin-top: 16px;
+  align-items: stretch;
+  min-height: 0;
+}
+
+:root[data-ui-theme="soft-sculpt"] .day-view-hero {
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.day-summary-card,
+.day-agenda-card,
+.day-timeline-panel {
+  min-height: 100%;
+}
+
+:root[data-ui-theme="soft-sculpt"] .day-summary-card {
+  background: transparent;
+  box-shadow: none;
+  border: 0;
+  padding: 0;
+}
+
+:root[data-ui-theme="soft-sculpt"] .day-timeline-panel,
+:root[data-ui-theme="soft-sculpt"] .day-agenda-card,
+:root[data-ui-theme="soft-sculpt"] .todo-list-panel {
+  padding: 10px;
+}
+
+.day-meta-stack {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.day-agenda-card,
+.day-timeline-panel {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.day-agenda-card {
+  /* 左侧“日程详情”外层卡片：
+     固定为“标题栏 + 内容区”两层，让深凹详情区只占剩余高度。 */
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+}
+
+.day-trace-card {
+  display: none;
+}
+
+.event-editor-panel {
+  width: min(920px, calc(100vw - 32px));
+  padding: 18px;
+  border-radius: 28px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 245, 237, 0.96));
+}
+
+:root[data-ui-theme="soft-sculpt"] .event-editor-panel {
+  background: #dfe7f0;
+  border-radius: 16px;
+}
+
+.event-editor-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.9fr) minmax(0, 1.1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.event-ai-card,
+.compact-event-form {
+  border: 1px solid rgba(81, 60, 42, 0.1);
+  border-radius: 22px;
+  background: var(--surface-elevated);
+  box-shadow: 0 10px 24px rgba(61, 42, 26, 0.06);
+}
+
+:root[data-ui-theme="soft-sculpt"] .event-ai-card,
+:root[data-ui-theme="soft-sculpt"] .compact-event-form {
+  background: #e4ebf2;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 2px 3px 8px rgba(80, 92, 112, 0.14);
+  border-radius: 14px;
+}
+
+.event-ai-card {
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.event-ai-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.event-ai-head h3 {
+  margin: 0;
+  font-size: 1.12rem;
+}
+
+.compact-event-form {
+  padding: 18px;
+  gap: 12px;
+}
+
+.compact-event-form label {
+  gap: 6px;
+}
+
+.compact-field-grid {
+  gap: 10px;
+}
+
+.raw-input-field {
+  opacity: 0.92;
+}
+
+.day-board {
+  --day-hour-height: 32px;
+  --day-half-hour-height: 16px;
+  --day-total-hours: 24;
+  margin-top: 16px;
+  border: 1px solid rgba(81, 60, 42, 0.08);
+  border-radius: 24px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+:root[data-ui-theme="soft-sculpt"] .day-board {
+  background: linear-gradient(180deg, #e4ebf3 0%, #dbe4ed 100%);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    inset 0 -2px 5px rgba(144, 157, 177, 0.1),
+    0 12px 24px rgba(64, 78, 99, 0.14);
+  border-radius: 16px;
+}
+
+.compact-day-board {
+  margin-top: 14px;
+}
+
+.day-board.is-embedded {
+  margin-top: 0;
+  height: 100%;
+  background: var(--nui-inset-surface);
+  display: grid;
+  grid-template-rows: auto 8px minmax(0, 1fr);
+  --day-all-day-height: 96px;
+}
+
+:root[data-ui-theme="soft-sculpt"] .day-board.is-embedded {
+  background: var(--nui-inset-surface);
+  box-shadow: var(--nui-dark-inset-shadow), var(--nui-dark-inset-light);
+}
+
+:root[data-ui-theme="soft-sculpt"] .day-all-day-title,
+:root[data-ui-theme="soft-sculpt"] .day-all-day-head {
+  background: rgba(248, 251, 255, 0.62);
+  border-color: rgba(163, 177, 198, 0.22);
+}
+
+:root[data-ui-theme="soft-sculpt"] .day-all-day-chip {
+  background: color-mix(in srgb, var(--record-accent, var(--accent)) 12%, #ffffff);
+  border-color: color-mix(in srgb, var(--record-accent-border, var(--record-accent, var(--accent))) 26%, white);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 5px 10px rgba(64, 78, 99, 0.08);
+}
+
+.day-all-day-row,
+.day-timeline-shell {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  align-items: start;
+}
+
+.day-all-day-row {
+  overflow: hidden;
+}
+
+.day-all-day-title,
+.day-time-labels {
+  border-right: 1px solid rgba(81, 60, 42, 0.08);
+}
+
+.day-column-label {
+  padding: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.day-all-day-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--day-all-day-height);
+  min-height: 0;
+  color: var(--muted);
+  font-weight: 600;
+  border-top: 1px solid rgba(81, 60, 42, 0.08);
+  border-bottom: 1px solid rgba(81, 60, 42, 0.08);
+}
+
+.day-all-day-head {
+  min-width: 0;
+  height: var(--day-all-day-height);
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-items: start;
+  align-content: start;
+  gap: 8px;
+  padding: 6px 8px;
+  overflow: hidden;
+  border-top: 1px solid rgba(81, 60, 42, 0.08);
+  border-bottom: 1px solid rgba(81, 60, 42, 0.08);
+}
+
+.day-all-day-strip {
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: transparent;
+}
+
+.day-all-day-strip.is-scrollable {
+  max-height: none;
+  overflow-y: scroll;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(85, 91, 110, 0.58) rgba(85, 91, 110, 0.12);
+  scrollbar-gutter: stable;
+}
+
+.day-all-day-chip {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 2px 6px;
+  line-height: 1.15;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--record-accent-border, var(--accent)) 24%, transparent);
+  background: color-mix(in srgb, var(--record-accent, var(--accent)) 10%, white);
+  color: var(--record-accent-text, #134743);
+  cursor: pointer;
+}
+
+.day-all-day-chip-title {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.day-scroll-shell {
+  min-height: 0;
+  grid-row: 3;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.timeline-resize-handle {
+  position: relative;
+  z-index: 3;
+  height: 8px;
+  cursor: row-resize;
+  background: transparent;
+}
+
+.timeline-resize-handle::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: rgba(85, 91, 110, 0.82);
+  box-shadow: none;
+}
+
+.day-resize-handle {
+  grid-row: 2;
+}
+
+.daily-event-list {
+  min-height: 0;
+  height: 100%;
+}
+
+.day-agenda-card > .daily-event-list {
+  /* 日视图详情区现在承载的是单个详情面板，不再是普通列表。
+     这里单独脱离通用列表的 flex 叠放逻辑，避免 gap 和子项满高叠加后把外层深凹壳撑大。 */
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0;
+  overflow: hidden;
+}
+
+.day-agenda-card > .daily-event-list > .daily-event-item.is-detail {
+  /* 日视图详情模式里，这张白色内容卡必须明确吃满父层内容区。
+     否则它会退回按内容自然高度排版，底下就会露出一大片 day-agenda-card 的底色。 */
+  align-self: stretch;
+  height: 100%;
+  min-height: 100%;
+}
+
+.day-time-labels {
+  position: relative;
+  min-height: calc(var(--day-total-hours) * var(--day-hour-height));
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.compact-day-time-labels {
+  min-height: calc(var(--day-total-hours) * var(--day-hour-height));
+  background: transparent;
+}
+
+.day-time-marker {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+}
+
+.day-time-marker span {
+  position: absolute;
+  top: -10px;
+  right: 12px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.day-grid-surface {
+  position: relative;
+  min-height: calc(var(--day-total-hours) * var(--day-hour-height));
+  cursor: crosshair;
+  user-select: none;
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(81, 60, 42, 0.08) 0,
+      rgba(81, 60, 42, 0.08) 1px,
+      transparent 1px,
+      transparent var(--day-hour-height)
+    ),
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent calc(var(--day-half-hour-height) - 1px),
+      rgba(81, 60, 42, 0.05) calc(var(--day-half-hour-height) - 1px),
+      rgba(81, 60, 42, 0.05) var(--day-half-hour-height),
+      transparent var(--day-half-hour-height),
+      transparent var(--day-hour-height)
+    );
+}
+
+.compact-day-grid-surface {
+  min-height: calc(var(--day-total-hours) * var(--day-hour-height));
+}
+
+.compact-day-timeline-shell {
+  min-height: 0;
+}
+
+.day-grid-surface.is-dragging {
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(17, 94, 89, 0.12) 0,
+      rgba(17, 94, 89, 0.12) 1px,
+      transparent 1px,
+      transparent var(--day-hour-height)
+    ),
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent calc(var(--day-half-hour-height) - 1px),
+      rgba(81, 60, 42, 0.05) calc(var(--day-half-hour-height) - 1px),
+      rgba(81, 60, 42, 0.05) var(--day-half-hour-height),
+      transparent var(--day-half-hour-height),
+      transparent var(--day-hour-height)
+    );
+}
+
+.day-event-block,
+.day-selection-preview {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  border-radius: 18px;
+  padding: 10px 12px;
+  overflow: hidden;
+}
+
+.day-event-block {
+  border-left: 4px solid var(--record-accent, var(--accent));
+  background: color-mix(in srgb, var(--record-accent, var(--accent)) 16%, white);
+  color: var(--record-accent-text, #134743);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--record-accent, var(--accent)) 14%, transparent);
+  cursor: pointer;
+}
+
+
+.day-event-block.is-selected,
+.week-event-block.is-selected,
+.week-all-day-item.is-selected,
+.day-all-day-chip.is-selected {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--record-accent, var(--accent)) 48%, white),
+    0 10px 24px color-mix(in srgb, var(--record-accent, var(--accent)) 18%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--record-accent, var(--accent)) 34%, white);
+  outline-offset: 0;
+}
+
+.day-event-block.is-nav-flashing,
+.week-event-block.is-nav-flashing,
+.week-all-day-item.is-nav-flashing,
+.day-all-day-chip.is-nav-flashing,
+.calendar-day.is-nav-flashing,
+.month-inline-chip.is-nav-flashing,
+.month-span-bar.is-nav-flashing {
+  animation: record-nav-flash 0.84s cubic-bezier(0.22, 1, 0.36, 1) 1;
+}
+
+@keyframes record-nav-flash {
+  0% {
+    transform: scale(1);
+    box-shadow:
+      0 0 0 0 color-mix(in srgb, var(--record-accent, var(--accent)) 0%, transparent),
+      0 8px 18px color-mix(in srgb, var(--record-accent, var(--accent)) 8%, transparent);
+  }
+  28% {
+    transform: translateY(-1px) scale(1.008);
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--record-accent, var(--accent)) 18%, white),
+      0 14px 24px color-mix(in srgb, var(--record-accent, var(--accent)) 16%, transparent);
+  }
+  54% {
+    transform: translateY(0) scale(1);
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--record-accent, var(--accent)) 10%, white),
+      0 10px 18px color-mix(in srgb, var(--record-accent, var(--accent)) 10%, transparent);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow:
+      0 0 0 0 color-mix(in srgb, var(--record-accent, var(--accent)) 0%, transparent),
+      0 8px 18px color-mix(in srgb, var(--record-accent, var(--accent)) 8%, transparent);
+  }
+}
+
+:root[data-ui-theme="soft-sculpt"] .day-event-block {
+  border-left-color: var(--record-accent, var(--accent));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--record-accent, var(--accent)) 26%, #ffffff) 0%,
+    color-mix(in srgb, var(--record-accent, var(--accent)) 40%, #fff6f3) 100%
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.68),
+    0 8px 14px color-mix(in srgb, var(--record-accent, var(--accent)) 18%, rgba(64, 78, 99, 0.08));
+  color: var(--record-accent-text, #134743);
+  border-radius: 12px;
+}
+
+.day-event-block h3 {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+}
+
+.daily-event-item.is-focused {
+  border-color: rgba(17, 94, 89, 0.34);
+  box-shadow: 0 12px 26px rgba(17, 94, 89, 0.12);
+  background: rgba(211, 239, 233, 0.3);
+}
+
+.day-event-block p {
+  margin: 0;
+  font-size: 0.84rem;
+}
+
+.day-selection-preview {
+  border: 1px dashed rgba(17, 94, 89, 0.55);
+  background: rgba(211, 239, 233, 0.42);
+  color: var(--accent);
+  font-weight: 600;
+  display: flex;
+  align-items: flex-start;
+}
+
+.day-empty-hint {
+  position: absolute;
+  left: 20px;
+  top: 16px;
+  color: rgba(110, 98, 89, 0.72);
+  font-size: 0.9rem;
+}
+
+.event-detail-popover {
+  position: fixed;
+  left: var(--popover-left, 24px);
+  top: var(--popover-top, 24px);
+  width: min(320px, calc(100vw - 32px));
+  z-index: 60;
+  border: 1px solid rgba(81, 60, 42, 0.14);
+  border-radius: 24px;
+  background: rgba(255, 252, 247, 0.98);
+  box-shadow: 0 24px 60px rgba(43, 36, 31, 0.18);
+  backdrop-filter: blur(18px);
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0) scale(1);
+  transform-origin: var(--popover-origin-x, 0px) var(--popover-origin-y, 24px);
+  transition:
+    opacity 260ms cubic-bezier(0.16, 0.02, 0.08, 1),
+    transform 360ms cubic-bezier(0.16, 0.02, 0.08, 1),
+    box-shadow 360ms cubic-bezier(0.16, 0.02, 0.08, 1),
+    visibility 0s linear 0s;
+}
+
+.event-detail-popover.is-raw-expanded {
+  width: min(420px, calc(100vw - 32px));
+}
+
+:root[data-ui-theme="soft-sculpt"] .event-detail-popover {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: #e4ebf2;
+  box-shadow: 4px 6px 12px rgba(80, 92, 112, 0.16);
+  backdrop-filter: none;
+  border-radius: 14px;
+}
+
+.event-detail-popover.is-hidden {
+  /* 完全关闭态：元素不可见也不可交互。这里保留轻微缩小，
+     让下一次从源事项“长出来”时不会显得太突然。 */
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: scale(0.94);
+  transition:
+    opacity 180ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    visibility 0s linear 220ms;
+}
+
+.event-detail-popover.is-entering {
+  /* 打开第一拍先只有“壳体感”，内容后面再延迟淡入。
+     这样更接近一个小卡片先长出来，再变成完整详情卡。 */
+  opacity: 0.18;
+  visibility: visible;
+  pointer-events: none;
+  transform: scale(0.52);
+}
+
+.event-detail-popover.is-closing {
+  /* 关闭时反过来：先让完整卡片明显缩小，再回收到源事项。
+     这里不做额外位移，避免视觉上误以为缩放中心偏掉。 */
+  opacity: 0.02;
+  pointer-events: none;
+  transform: scale(0.34);
+  box-shadow: 0 10px 20px rgba(43, 36, 31, 0.08);
+}
+
+.event-detail-popover.is-visible {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0) scale(1);
+}
+
+.event-detail-popover-arrow {
+  position: absolute;
+  top: var(--popover-arrow-top, 40px);
+  width: 18px;
+  height: 18px;
+  background: rgba(255, 252, 247, 0.98);
+  border-top: 1px solid rgba(81, 60, 42, 0.14);
+  border-left: 1px solid rgba(81, 60, 42, 0.14);
+  transform: rotate(45deg);
+}
+
+:root[data-ui-theme="soft-sculpt"] .event-detail-popover-arrow {
+  background: #dce4ed;
+  border-top-color: rgba(255, 255, 255, 0.18);
+  border-left-color: rgba(255, 255, 255, 0.18);
+}
+
+.event-detail-popover[data-side="right"] .event-detail-popover-arrow {
+  left: -9px;
+}
+
+.event-detail-popover[data-side="left"] .event-detail-popover-arrow {
+  right: -9px;
+  transform: rotate(225deg);
+}
+
+.event-detail-popover-content {
+  position: relative;
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+  border-radius: inherit;
+  opacity: 1;
+  transform: scale(1);
+  transition:
+    opacity 160ms cubic-bezier(0.24, 0.88, 0.34, 1),
+    transform 220ms cubic-bezier(0.24, 0.88, 0.34, 1),
+    filter 220ms cubic-bezier(0.24, 0.88, 0.34, 1);
+}
+
+.event-detail-popover.is-entering .event-detail-popover-content,
+.event-detail-popover.is-closing .event-detail-popover-content {
+  /* 内容层单独后进先退：
+     - 打开时先让壳体成型，内容再出现
+     - 关闭时先让内容退场，外层容器再缩回 */
+  opacity: 0;
+  transform: scale(0.9);
+  filter: blur(3px);
+}
+
+.event-detail-popover.is-visible .event-detail-popover-content {
+  opacity: 1;
+  transform: scale(1);
+  filter: blur(0);
+  transition-delay: 170ms;
+}
+
+.event-detail-inline-title,
+.event-detail-inline-label input,
+.event-detail-inline-label textarea,
+.event-detail-inline-grid input,
+.event-detail-inline-grid select {
+  width: 100%;
+  border: 1px solid rgba(81, 60, 42, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--text);
+}
+
+:root[data-ui-theme="soft-sculpt"] .event-detail-inline-title,
+:root[data-ui-theme="soft-sculpt"] .event-detail-inline-label input,
+:root[data-ui-theme="soft-sculpt"] .event-detail-inline-label textarea,
+:root[data-ui-theme="soft-sculpt"] .event-detail-inline-grid input,
+:root[data-ui-theme="soft-sculpt"] .event-detail-inline-grid select,
+:root[data-ui-theme="soft-sculpt"] .event-detail-inline-temporal-input,
+:root[data-ui-theme="soft-sculpt"] .event-detail-ai-input {
+  border: 1px solid rgba(187, 198, 213, 0.18);
+  background: var(--nui-inset-surface);
+  box-shadow: inset 2px 2px 3px rgba(163, 177, 198, 0.72);
+}
+
+:root[data-ui-theme="soft-sculpt"] .event-detail-inline-title:focus,
+:root[data-ui-theme="soft-sculpt"] .event-detail-inline-label input:focus,
+:root[data-ui-theme="soft-sculpt"] .event-detail-inline-label textarea:focus,
+:root[data-ui-theme="soft-sculpt"] .event-detail-inline-grid input:focus,
+:root[data-ui-theme="soft-sculpt"] .event-detail-inline-grid select:focus,
+:root[data-ui-theme="soft-sculpt"] .event-detail-inline-temporal-input:focus,
+:root[data-ui-theme="soft-sculpt"] .event-detail-ai-input:focus {
+  outline: none;
+  border-color: rgba(152, 168, 189, 0.32);
+  box-shadow: inset 2px 2px 4px rgba(150, 164, 184, 0.82);
+}
+
+.event-detail-inline-title {
+  margin: 4px 0 0;
+  padding: 12px 16px;
+  font-size: 1rem;
+  font-weight: 600;
+  border-radius: 22px;
+}
+
+.event-detail-title-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: 10px;
+}
+
+.event-detail-tag-picker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.event-detail-tag-dot {
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  border-radius: 999px;
+  padding: 0;
+  border: 0;
+  background: var(--event-tag-dot, #115e59);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.72);
+}
+
+.event-detail-tag-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: -8px;
+  z-index: 8;
+  min-width: 180px;
+  max-width: 220px;
+  max-height: 220px;
+  overflow: auto;
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(81, 60, 42, 0.1);
+  background: rgba(255, 250, 241, 0.98);
+  box-shadow: 0 18px 44px rgba(43, 36, 31, 0.14);
+}
+
+.event-detail-inline-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.event-detail-time-shell {
+  display: grid;
+  gap: 0;
+  margin-bottom: 2px;
+}
+
+.event-detail-time-summary {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(81, 60, 42, 0.08);
+  background: rgba(255, 255, 255, 0.9);
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  transition:
+    opacity 180ms ease,
+    transform 220ms ease,
+    max-height 220ms ease,
+    padding 220ms ease,
+    border-color 180ms ease,
+    margin 220ms ease;
+  max-height: 96px;
+  transform-origin: top center;
+}
+
+.event-detail-time-summary-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.event-detail-time-summary-value {
+  font-size: 0.98rem;
+  line-height: 1.35;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.event-detail-time-summary.is-ai-updated {
+  color: var(--accent);
+  border-color: rgba(17, 94, 89, 0.24);
+  background: rgba(236, 249, 246, 0.9);
+}
+
+.event-detail-time-editor-wrap {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transform: translateY(-6px);
+  pointer-events: none;
+  transition:
+    grid-template-rows 240ms ease,
+    opacity 180ms ease,
+    transform 220ms ease,
+    margin 220ms ease;
+  margin-top: 0;
+}
+
+.event-detail-time-shell.is-expanded .event-detail-time-summary {
+  opacity: 0;
+  transform: translateY(-6px) scale(0.985);
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  margin: 0;
+  border-color: transparent;
+  pointer-events: none;
+}
+
+.event-detail-time-shell.is-expanded .event-detail-time-editor-wrap {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+  margin-top: 2px;
+}
+
+.event-detail-temporal-editor {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 20px;
+  background: rgba(248, 248, 248, 0.9);
+  min-height: 0;
+  overflow: hidden;
+}
+
+:root[data-ui-theme="soft-sculpt"] .event-detail-temporal-editor {
+  background: rgba(239, 243, 248, 0.72);
+}
+
+.event-detail-temporal-row {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.event-detail-temporal-row.is-ai-updated .event-detail-temporal-value {
+  border-color: rgba(17, 94, 89, 0.3);
+  box-shadow: 0 0 0 1px rgba(17, 94, 89, 0.08);
+  background: rgba(236, 249, 246, 0.9);
+}
+
+.event-detail-temporal-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.event-detail-inline-temporal-input {
+  width: 100%;
+  min-width: 0;
+  padding: 11px 13px;
+  border-radius: 16px;
+  border: 1px solid rgba(81, 60, 42, 0.08);
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--text);
+}
+
+
+.event-detail-inline-grid label,
+.event-detail-inline-label {
+  display: grid;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.event-detail-inline-grid label.is-ai-updated,
+.event-detail-inline-label.is-ai-updated,
+.event-detail-popover-title-wrap.is-ai-updated {
+  color: var(--accent);
+}
+
+.event-detail-inline-grid input,
+.event-detail-inline-grid select,
+.event-detail-inline-label input {
+  padding: 11px 13px;
+  border-radius: 16px;
+}
+
+.event-detail-inline-grid label.is-ai-updated input,
+.event-detail-inline-grid label.is-ai-updated select,
+.event-detail-inline-label.is-ai-updated input,
+.event-detail-inline-label.is-ai-updated textarea,
+.event-detail-inline-title.is-ai-updated {
+  border-color: rgba(17, 94, 89, 0.3);
+  box-shadow: 0 0 0 1px rgba(17, 94, 89, 0.08);
+  background: rgba(236, 249, 246, 0.9);
+}
+
+.event-detail-inline-notes {
+  min-height: 40px;
+  max-height: 140px;
+  padding: 11px 13px;
+  border-radius: 16px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.event-detail-ai-box {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(81, 60, 42, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.event-detail-ai-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.event-detail-ai-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.event-detail-ai-input {
+  width: 100%;
+  min-height: 64px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(81, 60, 42, 0.12);
+  background: rgba(255, 255, 255, 0.84);
+  color: var(--text);
+  resize: vertical;
+}
+
+.event-detail-inline-actions {
+  display: flex;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.event-detail-popover-head {
+  display: block;
+}
+
+.event-detail-popover-title-wrap h3 {
+  margin: 4px 0 0;
+  font-size: 1.02rem;
+}
+
+.event-detail-popover-eyebrow {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: none;
+}
+
+.event-detail-popover-notes,
+.event-detail-popover-foot p {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.5;
+  font-size: 0.9rem;
+}
+
+.event-detail-popover-foot {
+  display: grid;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(81, 60, 42, 0.08);
+}
+
+.event-detail-popover-foot.is-collapsed {
+  display: none;
+}
+
+.event-detail-popover-foot span {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+@media (max-width: 1260px) {
+  :root[data-ui-theme="soft-sculpt"] {
+    --shell-gap: 12px;
+    --panel-padding: 12px;
+    --toolbar-pill-padding: 10px;
+  }
+
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar-resize-handle {
+    display: none;
+  }
+
+  .topbar-layout {
+    flex-wrap: wrap;
+  }
+
+  .topbar-utilities {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 900px) {
+  :root[data-ui-theme="soft-sculpt"] {
+    --shell-padding: 10px;
+    --toolbar-rail-height: 36px;
+    --toolbar-pill-height: 32px;
+    --toolbar-pill-padding: 9px;
+  }
+
+  .detail-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .day-header-row,
+  .day-all-day-row,
+  .day-timeline-shell {
+    grid-template-columns: 68px minmax(0, 1fr);
+  }
+
+  .summary-stat-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .event-editor-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .day-view-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .todo-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar-header {
+    flex-wrap: wrap;
+  }
+
+  .sidebar-pane-nav,
+  .top-view-nav {
+    max-width: 100%;
+  }
+
+  .chat-compose-footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .compose-actions {
+    justify-content: stretch;
+  }
+}
+
+@media (max-width: 720px) {
+  .app-shell {
+    padding: 12px;
+  }
+
+  .segmented-control {
+    grid-template-columns: 1fr;
+  }
+
+  .field-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .topbar-layout {
+    gap: 8px;
+  }
+
+  .top-view-nav .nav-btn {
+    min-width: 80px;
+  }
+
+  .sidebar-pane-nav .nav-btn {
+    padding-inline: 10px;
+  }
+
+  .day-column-label {
+    font-size: 1rem;
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .day-event-block,
+  .day-selection-preview {
+    left: 10px;
+    right: 10px;
+  }
+}
