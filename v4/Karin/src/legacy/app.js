@@ -9,6 +9,10 @@ const DAY_END_HOUR = 24;
    - 周视图拖动已有定时卡片
    视觉网格暂时仍保留现有密度，不强制把所有辅助线也同步加密。 */
 const DAY_SLOT_MINUTES = 15;
+/* 月视图单格里的定时事项只做“轻量摘要”展示。
+   这里把可见条数单独收成常量，后续如果要继续压缩 / 放宽信息密度，只改这一处即可。 */
+const MONTH_TIMED_EVENT_VISIBLE_LIMIT = 4;
+const MONTH_BAR_ROW_HEIGHT = 20;
 const WEEK_HOUR_HEIGHT = 48;
 const DAY_HOUR_HEIGHT = 32;
 const VIEW_SEQUENCE = ["day", "month", "week", "todo"];
@@ -35,6 +39,11 @@ let eventDetailViewportSyncFrame = 0;
 // 这个指针目标用于“月 / 周视图全天事项快速输入”的 blur 时序协调。
 // 鼠标点击外部时，blur 会早于 click 触发；这里只记录那次 pointer，避免 blur 阶段提前 render。
 let allDayQuickEntryPointerTarget = null;
+/* 月视图拖拽是“按日期格 / 全天条带 lane 命中”的二维交互，
+   与日 / 周时间轴那套“像素 -> 分钟”的拖拽语义不同，所以单独保留一份运行时 session。
+   它只存在于当前鼠标操作期间，不进入持久化 state。 */
+let monthDragSession = null;
+let allDayCardDragSession = null;
 /*
   Karin workspace runtime
 
@@ -122,8 +131,6 @@ const state = {
   activeTagFilters: [],
   editingEventId: null,
   editingTodoId: null,
-  dayDrag: null,
-  timedCardDrag: null,
   /* 拖拽完成后，浏览器仍可能补发一次 click。
      这里短暂记录“下一次详情点击要吞掉”，避免用户拖完卡片后又立刻弹出详情。 */
   suppressDetailOpen: {
@@ -178,6 +185,7 @@ const state = {
     focusMonth: isoDate(startOfMonth(new Date())),
     initialized: false,
     syncToken: 0,
+    restoreExactScrollTop: null,
     restoreOffset: 0,
     restoreWeekStart: "",
     restoreWeekOffset: 0,
@@ -230,6 +238,20 @@ const state = {
     - 周视图要保“横向左边界日期 + 纵向 scrollTop”
     拆开后更容易保持各自滚动语义稳定。 */
   weekQuickEntry: {
+    recordId: "",
+    date: "",
+    draftTitle: "",
+    focusToken: 0,
+  },
+  /* 日视图全天栏的快速输入状态：
+     现在它与月 / 周视图使用同一种“清单式全天事项入口”语义：
+     - 双击空白区域：创建并直接进入标题输入
+     - 双击现有单天全天事项：原地改标题
+     - Enter：继续创建下一条
+     - 上下键：在同一列全天事项之间切换焦点
+     - 空标题时再次 Delete / Backspace：删除当前空白事项
+     日视图没有额外的滚动恢复语义，因此这里只保留最小输入态。 */
+  dayQuickEntry: {
     recordId: "",
     date: "",
     draftTitle: "",
@@ -365,6 +387,13 @@ const refs = {
   runtimeLogCount: document.querySelector("#runtime-log-count"),
   llmTraceLogPath: document.querySelector("#llm-trace-log-path"),
 };
+
+/* 时间轴拖拽完全属于运行时交互态：
+   - 不需要进持久化 state
+   - 不应该驱动整页 render
+   - 只在当前视图活着时缓存几何信息和预览 DOM
+   日 / 周视图都复用这一份 session。 */
+let timelineDragSession = null;
 
 window.KarinLegacyApp = {
   bootstrap: bootstrapLegacyKarinApp,
@@ -653,6 +682,7 @@ function bindEvents() {
     closeTagFilterPanel();
   });
   document.addEventListener("click", handleGlobalClickForMonthQuickEntry);
+  document.addEventListener("click", handleGlobalCalendarBlankFocusReset);
   document.addEventListener("keydown", handleGlobalKeydown);
   window.addEventListener("resize", closeEventDetailPopover);
   window.addEventListener("resize", closeTagFilterPanel);
@@ -679,9 +709,22 @@ function handleGlobalPointerDownForMonthQuickEntry(event) {
   }, 0);
 }
 
+function handleGlobalCalendarBlankFocusReset(event) {
+  /* “高亮选中”不应该依赖详情卡片是否还开着。
+     所以这里单独补一层全局失焦：只要用户点到任何非日程卡片 / 非详情面板 /
+     非快速输入框的区域，就把当前 calendar selection 清掉。 */
+  if (!state.editingEventId) return;
+  if (event.target.closest("#event-detail-popover")) return;
+  if (event.target.closest("[data-event-detail-trigger]")) return;
+  if (event.target.closest("[data-day-event-id], [data-week-event-id], [data-month-event-id]")) return;
+  if (event.target.closest("[data-day-quick-entry], [data-week-quick-entry], [data-month-quick-entry]")) return;
+  if (event.target.closest("[data-day-quick-input], [data-week-quick-input], [data-month-quick-input]")) return;
+  clearActiveCalendarSelection();
+}
+
 function handleGlobalClickForMonthQuickEntry(event) {
-  // 点击“月 / 周视图全天事项快速输入框”外部时，统一在 click 阶段收起，避免 blur / render 抢时序。
-  const insideQuickInput = event.target.closest("[data-month-quick-entry], [data-month-quick-input], [data-week-quick-entry], [data-week-quick-input]");
+  // 点击“月 / 周 / 日视图全天事项快速输入框”外部时，统一在 click 阶段收起，避免 blur / render 抢时序。
+  const insideQuickInput = event.target.closest("[data-month-quick-entry], [data-month-quick-input], [data-week-quick-entry], [data-week-quick-input], [data-day-quick-entry], [data-day-quick-input]");
   if (insideQuickInput) return;
   if (state.activeView === "month" && state.monthQuickEntry.recordId) {
     finishMonthQuickEntry();
@@ -689,19 +732,33 @@ function handleGlobalClickForMonthQuickEntry(event) {
   if (state.activeView === "week" && state.weekQuickEntry.recordId) {
     finishWeekQuickEntry();
   }
+  if (state.activeView === "day" && state.dayQuickEntry.recordId) {
+    finishDayQuickEntry();
+  }
 }
 
 function handleGlobalKeydown(event) {
+  if ((event.key === "ArrowUp" || event.key === "ArrowDown") && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    const activeElement = document.activeElement;
+    const typingSurface = activeElement?.matches?.("input, textarea, select, [contenteditable='true']");
+    if (!typingSurface && state.activeView === "month" && !state.monthQuickEntry.recordId) {
+      const moved = moveMonthSelectedEvent(event.key === "ArrowUp" ? -1 : 1);
+      if (moved) {
+        event.preventDefault();
+        return;
+      }
+    }
+  }
   /* 键盘删除的统一入口：
      - 月视图快速输入中，空标题的 Backspace/Delete 由输入框自己处理
      - 其他场景下，只要当前存在选中的 calendar 卡片，就允许直接删掉它 */
   if ((event.key === "Backspace" || event.key === "Delete") && !event.metaKey && !event.ctrlKey && !event.altKey) {
     const activeElement = document.activeElement;
     const typingSurface = activeElement?.matches?.("input, textarea, select, [contenteditable='true']");
-    const isMonthQuickInput = activeElement?.matches?.("[data-month-quick-input]");
-    if (!typingSurface || isMonthQuickInput) {
+    const isAllDayQuickInput = activeElement?.matches?.("[data-month-quick-input], [data-week-quick-input], [data-day-quick-input]");
+    if (!typingSurface || isAllDayQuickInput) {
       const selectedEvent = getRecordById(state.editingEventId);
-      if (selectedEvent?.recordType === "calendar" && !state.monthQuickEntry.recordId) {
+      if (selectedEvent?.recordType === "calendar" && !state.monthQuickEntry.recordId && !state.weekQuickEntry.recordId && !state.dayQuickEntry.recordId) {
         event.preventDefault();
         deleteEventRecordById(selectedEvent.id, {
           closePopover: true,
@@ -718,6 +775,9 @@ function handleGlobalKeydown(event) {
     }
     if (state.weekQuickEntry.recordId) {
       finishWeekQuickEntry();
+    }
+    if (state.dayQuickEntry.recordId) {
+      finishDayQuickEntry();
     }
     closeEventDetailPopover();
     closeAllTagColorPalettes();
@@ -981,6 +1041,7 @@ function render() {
   renderRuntimeLogs();
   renderLlmTraceStatus();
   updateSelectedDateLabel();
+  syncCalendarSelectionHighlight();
   stop();
   syncKarinSession("render");
 }
@@ -998,6 +1059,9 @@ function renderActiveWorkspace() {
   }
   if (state.activeView !== "week" && state.weekQuickEntry.recordId) {
     finishWeekQuickEntry({ render: false });
+  }
+  if (state.activeView !== "day" && state.dayQuickEntry.recordId) {
+    finishDayQuickEntry({ render: false });
   }
   closeEventDetailPopover({ autoSave: false });
   if (state.activeView === "day") {
@@ -1110,8 +1174,16 @@ function handleViewKeySwitch(event) {
 // 日视图现在是“紧凑型工作台”，负责当天摘要、列表与轻量拖拽创建，不再追求铺满整页时间轴。
 function renderDayView() {
   const selected = parseDate(state.selectedDate);
-  refs.dayLabel.textContent = formatDayLabel(selected);
-  refs.dayColumnLabel.textContent = `${WEEKDAY_LABELS[(selected.getDay() + 6) % 7]} · ${selected.getMonth() + 1}/${selected.getDate()}`;
+  if (state.dayQuickEntry.recordId) {
+    const activeQuickRecord = getDayQuickEntryRecord();
+    if (!activeQuickRecord) {
+      clearDayQuickEntry();
+    } else if (String(activeQuickRecord.date || "") !== String(state.selectedDate)) {
+      finishDayQuickEntry({ render: false });
+    }
+  }
+  refs.dayLabel.innerHTML = buildDayLabelMarkup(selected);
+  refs.dayColumnLabel.innerHTML = buildDayColumnLabelMarkup(selected);
   renderDayTimeLabels();
 
   const events = getEventsForDate(state.selectedDate);
@@ -1127,41 +1199,112 @@ function renderDayView() {
     state.editingEventId = timedSegments[0].record.id;
   }
 
-  const selectionMarkup = state.dayDrag && state.dayDrag.scope !== "week" && state.dayDrag.dateIso === state.selectedDate
-    ? renderDaySelectionPreview(state.dayDrag.startMinutes, state.dayDrag.endMinutes)
-    : "";
-  refs.dayGridSurface.classList.toggle("is-dragging", state.dayDrag?.scope === "day");
+  refs.dayGridSurface.classList.toggle("is-dragging", Boolean(timelineDragSession?.scope === "day"));
   refs.dayGridSurface.innerHTML = `
-    ${!timedSegments.length && !selectionMarkup ? `<div class="day-empty-hint">在右侧时间轴拖拽，即可直接创建一段日程。</div>` : ""}
+    ${!timedSegments.length ? `<div class="day-empty-hint">在右侧时间轴拖拽，即可直接创建一段日程。</div>` : ""}
     ${timedSegments.map((segment) => renderDayEventBlock(segment)).join("")}
-    ${selectionMarkup}
+    <div class="timeline-drag-layer"></div>
   `;
 
   refs.dayAllDayStrip.classList.remove("is-scrollable");
   refs.dayAllDayStrip.innerHTML = allDayEvents.length
     ? allDayEvents.map((event) => {
       const viewModel = buildCalendarCardViewModel(event, { cardKind: "day_all_day", dragKind: "move_all_day" });
+      const singleDayQuickEditable = isMonthQuickEditableRecord(event);
+      const quickEditing = singleDayQuickEditable && state.dayQuickEntry.recordId === event.id;
+      if (quickEditing) {
+        return `
+        <div class="day-all-day-chip is-editing" data-day-event-id="${event.id}" data-day-quick-entry="${event.id}" ${buildCalendarCardDataAttributes(viewModel)} style="${viewModel.accentStyle}">
+          <input
+            class="day-quick-entry-input"
+            data-day-quick-input="${event.id}"
+            type="text"
+            value="${escapeHtml(state.dayQuickEntry.draftTitle)}"
+            placeholder="新建日程"
+            aria-label="快速输入全天事项标题"
+          >
+        </div>
+      `;
+      }
       return `
-      <button class="day-all-day-chip${state.editingEventId === event.id ? " is-selected" : ""}" data-day-event-id="${event.id}" ${buildCalendarCardDataAttributes(viewModel)} type="button" style="${viewModel.accentStyle}">
+      <button class="day-all-day-chip${singleDayQuickEditable ? " is-quick-editable" : ""}${state.editingEventId === event.id ? " is-selected" : ""}" data-day-event-id="${event.id}" data-day-all-day-event-id="${event.id}" data-day-single-all-day="${singleDayQuickEditable ? "true" : "false"}" ${buildCalendarCardDataAttributes(viewModel)} type="button" style="${viewModel.accentStyle}">
         <span class="day-all-day-chip-title">${escapeHtml(viewModel.title)}</span>
       </button>
     `;
     }).join("")
     : `<div class="slot-add-hint">双击这里添加全天事项</div>`;
 
-  refs.dayAllDayStrip.querySelectorAll("[data-day-event-id]").forEach((button) => {
+  refs.dayAllDayStrip.querySelectorAll("[data-day-event-id]:not([data-day-quick-entry])").forEach((button) => {
+    if (button.matches(".day-all-day-chip")) {
+      button.addEventListener("mousedown", (event) => {
+        const record = getRecordById(button.dataset.dayEventId);
+        if (!record || record.recordType !== "calendar" || !isAllDayLikeRecord(record)) return;
+        beginAllDayCardDrag(event, button, record, {
+          scope: "day",
+          getSourceDate: () => record.date || state.selectedDate,
+          getTimelineHit: (moveEvent) => getBoundedTimelineHit(moveEvent, buildDayTimelineGeometry()),
+          getAllDayDate: () => record.date || state.selectedDate,
+          getDropAnchor: (moveEvent) => {
+            const anchorNode = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY)?.closest?.(".day-all-day-chip[data-day-event-id]");
+            if (!anchorNode || anchorNode.dataset.dayEventId === record.id) return null;
+            const rect = anchorNode.getBoundingClientRect();
+            return {
+              node: anchorNode,
+              recordId: anchorNode.dataset.dayEventId,
+              mode: moveEvent.clientY < rect.top + rect.height / 2 ? "before" : "after",
+              lane: 0,
+            };
+          },
+          commitTimeline: finalizeDayAllDayToTimelineDrag,
+          commitAllDay: finalizeDayAllDayLaneDrag,
+        });
+      });
+    }
     button.addEventListener("click", (event) => {
       event.stopPropagation();
       openEventDetailPopover(button.dataset.dayEventId, button);
     });
   });
-  refs.dayAllDayStrip.ondblclick = (event) => handleDayAllDayDoubleClick(event);
-  refs.dayView?.querySelector(".day-all-day-head")?.addEventListener("dblclick", (event) => {
-    if (event.target.closest("[data-day-event-id]")) return;
-    handleDayAllDayDoubleClick(event);
+  refs.dayAllDayStrip.querySelectorAll("[data-day-all-day-event-id][data-day-single-all-day='true']").forEach((button) => {
+    button.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const recordId = button.dataset.dayAllDayEventId;
+      const record = getRecordById(recordId);
+      if (!record || !isMonthQuickEditableRecord(record)) return;
+      state.selectedDate = record.date || state.selectedDate;
+      activateDayQuickEntry(record, { draftTitle: record.title || "", render: true });
+    });
   });
+  refs.dayAllDayStrip.ondblclick = (event) => handleDayAllDayDoubleClick(event);
+  /* 日视图全天栏只保留一个双击新建入口：
+     - strip 自己负责空白区双击
+     - 外层 head 不再重复 addEventListener
+     之前这里同时存在 strip.ondblclick + head.addEventListener("dblclick")，
+     而且 head 是静态节点，会在每次 renderDayView() 时不断叠加监听，
+     最终出现“一次双击创建几十条”的问题。 */
+  const dayAllDayHead = refs.dayView?.querySelector(".day-all-day-head");
+  if (dayAllDayHead) {
+    dayAllDayHead.ondblclick = (event) => {
+      if (event.target.closest(".day-all-day-strip")) return;
+      if (event.target.closest("[data-day-event-id]")) return;
+      handleDayAllDayDoubleClick(event);
+    };
+  }
+  bindDayQuickEntryInputs();
 
   refs.dayGridSurface.querySelectorAll("[data-day-event-id]").forEach((block) => {
+    if (block.matches(".day-event-block")) {
+      block.addEventListener("mousedown", (event) => {
+        const record = getRecordById(block.dataset.dayEventId);
+        if (!record || record.recordType !== "calendar" || isAllDayLikeRecord(record)) return;
+        beginTimelineMoveDrag(event, block, record, {
+          scope: "day",
+          getGeometry: buildDayTimelineGeometry,
+          commit: finalizeDayTimedCardDrag,
+        });
+      });
+    }
     block.addEventListener("click", (event) => {
       event.stopPropagation();
       if (shouldSuppressDetailOpen(block.dataset.dayEventId)) return;
@@ -1188,7 +1331,7 @@ function renderDayTimeLabels() {
   }).join("");
 }
 
-function renderDayEventBlock(segment) {
+function renderDayEventBlock(segment, options = {}) {
   const event = segment.record;
   /* 日视图事项卡片改为先生成共享 view-model。
      这样后续实现拖拽时，命中层只需要认 cardKind / dragKind，
@@ -1199,21 +1342,25 @@ function renderDayEventBlock(segment) {
   const safeEnd = Math.max(endMinutes, startMinutes + 30);
   const top = minutesToOffset(startMinutes, DAY_HOUR_HEIGHT);
   const height = Math.max(minutesToOffset(safeEnd, DAY_HOUR_HEIGHT) - top, 28);
+  const isDragSource = timelineDragSession?.mode === "move" && timelineDragSession?.record?.id === event.id && !options.preview;
+  const isPreview = Boolean(options.preview);
+  const previewKeyAttr = options.previewKey ? ` data-preview-key="${escapeHtml(String(options.previewKey))}"` : "";
   return `
-    <article class="day-event-block${state.editingEventId === event.id ? " is-selected" : ""}" data-day-event-id="${event.id}" data-segment-date="${segment.dateIso}" data-event-detail-trigger="day-timeline" ${buildCalendarCardDataAttributes(viewModel)} style="top:${top}px;height:${height}px;${viewModel.accentStyle}">
+    <article class="day-event-block${state.editingEventId === event.id ? " is-selected" : ""}${isDragSource ? " is-drag-source" : ""}${isPreview ? " is-drag-preview" : ""}" data-day-event-id="${event.id}" data-segment-date="${segment.dateIso}" data-event-detail-trigger="day-timeline"${previewKeyAttr} ${buildCalendarCardDataAttributes(viewModel)} style="top:${top}px;height:${height}px;z-index:${isPreview ? 48 : 20};${viewModel.accentStyle}">
       <h3>${escapeHtml(viewModel.title)}</h3>
       <p>${escapeHtml(viewModel.displayTimeText)}${viewModel.location ? ` · ${escapeHtml(viewModel.location)}` : ""}</p>
     </article>
   `;
 }
 
-function renderDaySelectionPreview(startMinutes, endMinutes) {
+function renderDaySelectionPreview(startMinutes, endMinutes, previewKey = "") {
   const start = Math.min(startMinutes, endMinutes);
   const end = Math.max(startMinutes, endMinutes);
   const top = minutesToOffset(start, DAY_HOUR_HEIGHT);
   const height = Math.max(minutesToOffset(end, DAY_HOUR_HEIGHT) - top, 24);
+  const previewKeyAttr = previewKey ? ` data-preview-key="${escapeHtml(String(previewKey))}"` : "";
   return `
-    <div class="day-selection-preview" style="top:${top}px;height:${height}px;">
+    <div class="day-selection-preview"${previewKeyAttr} style="top:${top}px;height:${height}px;">
       ${formatMinutes(start)} - ${formatMinutes(end)}
     </div>
   `;
@@ -1248,7 +1395,9 @@ function renderCalendar() {
      2. 双击标题行：跳到日视图
      3. 双击内容区空白：直接进入“单天全天事项”的快速输入 */
   refs.calendarGrid.querySelectorAll(".calendar-day").forEach((button) => {
+    button.addEventListener("mousedown", (event) => beginMonthCreateDrag(event, button));
     button.addEventListener("click", () => {
+      if (shouldSuppressSurfaceClick()) return;
       selectMonthDateInPlace(button.dataset.date);
       state.visibleWeek = startOfWeek(parseDate(state.selectedDate));
       if (!state.editingEventId) {
@@ -1262,7 +1411,7 @@ function renderCalendar() {
         navigateToDateDetail(button.dataset.date, { preferredView: "day" });
         return;
       }
-      if (event.target.closest("[data-month-event-id], .month-inline-chip")) return;
+      if (event.target.closest("[data-month-event-id]")) return;
       finishMonthQuickEntry({ render: false });
       const created = createSingleDayAllDayQuickEntry(button.dataset.date, {
         initialTitle: "新建日程",
@@ -1273,15 +1422,17 @@ function renderCalendar() {
   });
 
   refs.calendarGrid.querySelectorAll("[data-month-event-id]:not([data-month-quick-entry])").forEach((button) => {
+    button.addEventListener("mousedown", (event) => beginMonthCardDrag(event, button));
     button.addEventListener("click", (event) => {
       event.stopPropagation();
+      if (shouldSuppressSurfaceClick()) return;
+      if (shouldSuppressDetailOpen(button.dataset.monthEventId)) return;
+      /* 月视图里的普通单击应该只是“原地开详情”，不应该复用跨视图导航逻辑。
+         之前这里走 navigateToRecordInWorkspace(...)，它会在锚点不完全可见时主动滚动，
+         所以用户只是点一下卡片，也有概率触发页面跳转并把卡片带到视口中间。
+         日 / 周视图本来就是直接 openEventDetailPopover，这里统一改回同一语义。 */
       selectMonthDateInPlace(button.dataset.anchorDate || state.selectedDate);
-      navigateToRecordInWorkspace(button.dataset.monthEventId, {
-        preferredView: "month",
-        forceRender: false,
-        forceScroll: false,
-        behavior: "auto",
-      });
+      openEventDetailPopover(button.dataset.monthEventId, button);
     });
   });
 
@@ -1292,85 +1443,32 @@ function renderCalendar() {
       const recordId = button.dataset.monthAllDayEventId;
       const record = getRecordById(recordId);
       if (!record || !isMonthQuickEditableRecord(record)) return;
+      /* 月视图里双击单天全天事项的语义是“原地进入快速编辑”，
+         不是“导航到这条事项并重新滚动定位”。
+         之前这里还在走 navigateToRecordInWorkspace(...)，
+         所以双击时仍有概率触发页面滚动，首列位置尤其容易暴露这个问题。 */
       selectMonthDateInPlace(record.date || state.selectedDate);
-      navigateToRecordInWorkspace(recordId, {
-        preferredView: "month",
-        forceRender: false,
-        forceScroll: false,
-        behavior: "auto",
-      });
       activateMonthQuickEntry(record, { draftTitle: record.title || "", render: true });
     });
   });
 
-  refs.calendarGrid.querySelectorAll("[data-month-quick-input]").forEach((input) => {
-    const recordId = input.dataset.monthQuickInput;
-    input.addEventListener("input", () => {
+  bindScopedQuickEntryInputs({
+    root: refs.calendarGrid,
+    inputSelector: "[data-month-quick-input]",
+    recordIdAttribute: "data-month-quick-input",
+    getState: () => state.monthQuickEntry,
+    setDraft: (recordId, draftTitle) => {
       state.monthQuickEntry = {
         ...state.monthQuickEntry,
         recordId,
-        draftTitle: input.value,
+        draftTitle,
       };
-      // 一旦用户开始键入，就认为他进入“快速改标题”语义，详情弹层应自动让位。
-      if (state.eventDetailPopover?.recordId === recordId) {
-        closeEventDetailPopover({ statusMessage: "" });
-      }
-    });
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && !event.shiftKey) {
-        event.preventDefault();
-        handleMonthQuickEntrySubmit(recordId, input.value);
-        return;
-      }
-      if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-        const moved = moveMonthQuickEntryFocus(recordId, event.key === "ArrowUp" ? -1 : 1, input.value);
-        if (moved) {
-          event.preventDefault();
-        }
-        return;
-      }
-      if ((event.key === "Backspace" || event.key === "Delete") && !input.value.trim()) {
-        event.preventDefault();
-        // 空标题再次删除，直接删掉这条空白事项，做出列表应用里常见的“退空项”手感。
-        const deleted = deleteEventRecordById(recordId, {
-          closePopover: true,
-          statusMessage: "已删除空白全天事项。",
-        });
-        if (deleted) {
-          clearMonthQuickEntry();
-        }
-        return;
-      }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        finishMonthQuickEntry();
-      }
-    });
-    input.addEventListener("blur", () => {
-      window.setTimeout(() => {
-        const activeElement = document.activeElement;
-        if (activeElement?.matches?.("[data-month-quick-input]")) return;
-        if (allDayQuickEntryPointerTarget) return;
-        // 只有在确认不是“鼠标点击触发的失焦”时，blur 才允许兜底退出。
-        if (state.monthQuickEntry.recordId === recordId) {
-          finishMonthQuickEntry({ title: input.value });
-        }
-      }, 0);
-    });
+    },
+    submit: handleMonthQuickEntrySubmit,
+    moveFocus: moveMonthQuickEntryFocus,
+    finish: finishMonthQuickEntry,
+    clear: clearMonthQuickEntry,
   });
-
-  const focusToken = state.monthQuickEntry.focusToken;
-  if (focusToken && state.monthQuickEntry.recordId) {
-    requestAnimationFrame(() => {
-      if (focusToken !== state.monthQuickEntry.focusToken) return;
-      const input = refs.calendarGrid?.querySelector(`[data-month-quick-input="${state.monthQuickEntry.recordId}"]`);
-      if (!input) return;
-      input.focus();
-      if (input.value) {
-        input.setSelectionRange(input.value.length, input.value.length);
-      }
-    });
-  }
 
   syncMonthScrollerToFocusedMonth();
   refs.calendarGrid.onscroll = handleMonthScrollerScroll;
@@ -1382,6 +1480,80 @@ function selectMonthDateInPlace(dateIso) {
   if (!refs.calendarGrid) return;
   refs.calendarGrid.querySelectorAll(".calendar-day.is-selected").forEach((node) => node.classList.remove("is-selected"));
   refs.calendarGrid.querySelector(`.calendar-day[data-date="${dateIso}"]`)?.classList.add("is-selected");
+}
+
+/* “当前被详情选中的日程”只维护一份 editingEventId。
+   各视图自己的 DOM 结构不同，但都通过这一个同步器把 `.is-selected`
+   打到对应卡片上，避免月 / 周 / 日各自维护一套平行高亮状态。 */
+function syncCalendarSelectionHighlight() {
+  const selectedId = String(state.editingEventId || "");
+  const surfaces = [refs.dayView, refs.weekView, refs.calendarGrid].filter(Boolean);
+  surfaces.forEach((surface) => {
+    surface.querySelectorAll?.("[data-day-event-id], [data-week-event-id], .month-inline-chip[data-month-event-id], .month-span-bar[data-month-event-id]").forEach((node) => {
+      const nodeId = String(node.dataset.dayEventId || node.dataset.weekEventId || node.dataset.monthEventId || "");
+      node.classList.toggle("is-selected", Boolean(selectedId) && nodeId === selectedId);
+    });
+  });
+}
+
+function setActiveCalendarSelection(eventId) {
+  state.editingEventId = eventId || null;
+  state.editingTodoId = null;
+  syncCalendarSelectionHighlight();
+}
+
+function clearActiveCalendarSelection() {
+  state.editingEventId = null;
+  syncCalendarSelectionHighlight();
+}
+
+function getMonthSelectableEventEntries() {
+  if (!refs.calendarGrid) return [];
+  const nodes = Array.from(refs.calendarGrid.querySelectorAll(".month-inline-chip[data-month-event-id], .month-span-bar[data-month-event-id]:not([data-month-quick-entry])"));
+  const entries = [];
+  const seen = new Set();
+  nodes.forEach((node) => {
+    const eventId = String(node.dataset.monthEventId || "");
+    if (!eventId || seen.has(eventId)) return;
+    seen.add(eventId);
+    entries.push({
+      eventId,
+      node,
+      anchorDate: String(node.dataset.anchorDate || ""),
+    });
+  });
+  return entries;
+}
+
+function openMonthSelectedEventFromEntry(entry) {
+  if (!entry?.eventId || !entry.node) return false;
+  selectMonthDateInPlace(entry.anchorDate || state.selectedDate);
+  openEventDetailPopover(entry.eventId, entry.node);
+  return true;
+}
+
+function moveMonthSelectedEvent(offset) {
+  const entries = getMonthSelectableEventEntries();
+  if (!entries.length) return false;
+  const currentIndex = entries.findIndex((entry) => entry.eventId === String(state.editingEventId || ""));
+  const baseIndex = currentIndex >= 0 ? currentIndex : 0;
+  const nextIndex = baseIndex + offset;
+  if (nextIndex < 0 || nextIndex >= entries.length) return false;
+  return openMonthSelectedEventFromEntry(entries[nextIndex]);
+}
+
+function getMonthAdjacentEventId(eventId) {
+  const entries = getMonthSelectableEventEntries();
+  const currentIndex = entries.findIndex((entry) => entry.eventId === String(eventId || ""));
+  if (currentIndex < 0) return null;
+  const current = entries[currentIndex];
+  const sameDayEntries = entries.filter((entry) => entry.anchorDate === current.anchorDate);
+  const sameDayIndex = sameDayEntries.findIndex((entry) => entry.eventId === String(eventId || ""));
+  const sameDayNext = sameDayEntries[sameDayIndex + 1]?.eventId || "";
+  const sameDayPrev = sameDayEntries[sameDayIndex - 1]?.eventId || "";
+  if (sameDayNext) return sameDayNext;
+  if (sameDayPrev) return sameDayPrev;
+  return entries[currentIndex + 1]?.eventId || entries[currentIndex - 1]?.eventId || null;
 }
 
 function isMonthQuickEditableRecord(record) {
@@ -1439,6 +1611,14 @@ function preserveMonthScrollerPosition() {
   }
   state.monthScroll.restoreWeekStart = String(activeWeekRow?.dataset.weekStart || "");
   state.monthScroll.restoreWeekOffset = refs.calendarGrid.scrollTop - activeWeekRow.offsetTop;
+}
+
+function preserveMonthScrollerExactPosition() {
+  if (!refs.calendarGrid || state.activeView !== "month") return;
+  /* 月视图拖拽提交后的目标是“把用户留在当前看到的位置”，
+     不是重新推导一个新的月份/周锚点。
+     因此这里额外记录一份精确 scrollTop，供拖拽类重绘优先恢复。 */
+  state.monthScroll.restoreExactScrollTop = refs.calendarGrid.scrollTop;
 }
 
 /* calendar 卡片的共享可变 payload 基座：
@@ -1571,6 +1751,587 @@ function timelineHitToTimestamp(dateIso, minutes) {
   return date.getTime();
 }
 
+/* ---------- Shared Timeline Drag Engine ---------- */
+
+function ensureTimelinePreviewLayer(surface) {
+  if (!surface) return null;
+  let layer = surface.querySelector(".timeline-drag-layer");
+  if (layer) return layer;
+  layer = document.createElement("div");
+  layer.className = "timeline-drag-layer";
+  surface.appendChild(layer);
+  return layer;
+}
+
+function clearTimelinePreview(scope) {
+  const surface = scope === "week"
+    ? refs.weekGrid?.querySelector("#week-grid-surface")
+    : refs.dayGridSurface;
+  const layer = surface?.querySelector(".timeline-drag-layer");
+  if (layer) layer.innerHTML = "";
+}
+
+function buildCalendarPreviewRecord(record, payload = {}) {
+  return {
+    recordType: "calendar",
+    id: payload.id || record?.id || "drag_preview",
+    title: payload.title || record?.title || "",
+    date: payload.date || record?.date || state.selectedDate,
+    endDate: payload.endDate || getEventEndDateIso(record),
+    startTime: payload.startTime || record?.startTime || "",
+    endTime: payload.endTime || record?.endTime || "",
+    allDay: payload.allDay ?? isAllDayLikeRecord(record),
+    location: payload.location || record?.location || "",
+    notes: payload.notes || record?.notes || "",
+    tags: payload.tags || record?.tags || [],
+    tagColor: payload.tagColor || record?.tagColor || "",
+    startAt: payload.startAt || record?.startAt || "",
+    endAt: payload.endAt || record?.endAt || "",
+  };
+}
+
+function applyPreviewLayerMarkup(layer, html, itemSelector = "[data-preview-key]") {
+  /* 预览层不能再用“每次 innerHTML 整块替换”的方式更新。
+     否则浏览器会把预览节点视为“旧节点删掉，新节点新建”，
+     `top/left/height/width` 的 transition 根本没有旧值可补间，视觉上就会硬切。
+     这里按稳定的 preview key 复用已有节点，只覆写 class / style / innerHTML，
+     这样预览块从 4:00 -> 4:15 才会真正滑过去。 */
+  if (!layer) return;
+  if (!layer.childElementCount) {
+    layer.innerHTML = html;
+    return;
+  }
+
+  const template = document.createElement("template");
+  template.innerHTML = html.trim();
+  const nextNodes = Array.from(template.content.querySelectorAll(itemSelector));
+  const currentNodes = Array.from(layer.querySelectorAll(itemSelector));
+  if (!nextNodes.length) {
+    layer.innerHTML = "";
+    return;
+  }
+
+  const currentByKey = new Map(
+    currentNodes.map((node) => [String(node.getAttribute("data-preview-key") || ""), node]),
+  );
+  const seenKeys = new Set();
+
+  nextNodes.forEach((nextNode) => {
+    const key = String(nextNode.getAttribute("data-preview-key") || "");
+    if (!key) return;
+    seenKeys.add(key);
+    const existing = currentByKey.get(key);
+    if (!existing) {
+      layer.appendChild(nextNode.cloneNode(true));
+      return;
+    }
+    existing.className = nextNode.className;
+    existing.setAttribute("style", nextNode.getAttribute("style") || "");
+    existing.innerHTML = nextNode.innerHTML;
+  });
+
+  currentNodes.forEach((node) => {
+    const key = String(node.getAttribute("data-preview-key") || "");
+    if (!seenKeys.has(key)) {
+      node.remove();
+    }
+  });
+}
+
+function setTimelineDragSourceClass(sourceNode, active) {
+  if (!sourceNode) return;
+  sourceNode.classList.toggle("is-drag-source", Boolean(active));
+}
+
+function buildDayTimelineGeometry() {
+  const surface = refs.dayGridSurface;
+  if (!surface) return null;
+  /* 日 / 周视图拖拽共用同一套几何描述：
+     - rect: 当前时间轴可点击区域
+     - snapStep: 一个吸附槽位对应多少像素
+     - date/weekDays: 当前这一帧的日期语义
+     拖拽开始后这份数据会冻结在 session 里，mousemove 不再反复读 DOM。 */
+  return {
+    scope: "day",
+    surface,
+    rect: surface.getBoundingClientRect(),
+    dateIso: state.selectedDate,
+    snapStep: getTimelineSnapPixelStep(DAY_HOUR_HEIGHT),
+    hourHeight: DAY_HOUR_HEIGHT,
+  };
+}
+
+function buildWeekTimelineGeometry(weekDays) {
+  const surface = refs.weekGrid?.querySelector("#week-grid-surface");
+  if (!surface) return null;
+  const rect = surface.getBoundingClientRect();
+  return {
+    scope: "week",
+    surface,
+    rect,
+    weekDays: weekDays.map((day) => isoDate(day)),
+    dayWidth: rect.width / Math.max(1, weekDays.length),
+    snapStep: getTimelineSnapPixelStep(WEEK_HOUR_HEIGHT),
+    hourHeight: WEEK_HOUR_HEIGHT,
+  };
+}
+
+function pointerToTimelineHit(clientX, clientY, geometry) {
+  /* 时间轴命中换算统一收敛到这里：
+     输入是鼠标坐标 + 预先缓存好的几何信息，
+     输出一律是 `{ dateIso, minutes }`。
+     这样“日视图拖拽创建 / 日视图拖拽移动 / 周视图拖拽创建 / 周视图拖拽移动”
+     最终都走同一套坐标语义，不会再分裂成两套不同规则。 */
+  if (!geometry?.rect) return null;
+  const rect = geometry.rect;
+  const relativeY = Math.max(0, Math.min(rect.height, clientY - rect.top));
+  const rawMinutes = DAY_START_HOUR * 60 + Math.round(relativeY / geometry.snapStep) * DAY_SLOT_MINUTES;
+  const minutes = Math.max(DAY_START_HOUR * 60, Math.min(DAY_END_HOUR * 60, rawMinutes));
+  if (geometry.scope === "day") {
+    return {
+      dateIso: geometry.dateIso,
+      minutes,
+    };
+  }
+  const relativeX = Math.max(0, Math.min(rect.width - 1, clientX - rect.left));
+  const dayIndex = Math.max(0, Math.min(geometry.weekDays.length - 1, Math.floor(relativeX / Math.max(1, geometry.dayWidth))));
+  return {
+    dateIso: geometry.weekDays[dayIndex],
+    minutes,
+  };
+}
+
+function renderDayDragMovePreview(payload) {
+  const layer = ensureTimelinePreviewLayer(refs.dayGridSurface);
+  if (!layer) return;
+  const previewRecord = buildCalendarPreviewRecord(null, payload);
+  const segment = buildTimedEventSegmentForDate(previewRecord, state.selectedDate);
+  if (!segment) {
+    layer.innerHTML = "";
+    return;
+  }
+  applyPreviewLayerMarkup(layer, renderDayEventBlock(segment, { preview: true, previewKey: "day-move-preview" }));
+}
+
+function renderTimelineCreatePreview(dragState) {
+  /* “拖拽创建”预览和“拖拽移动”预览共用同一层 timeline-drag-layer，
+     区别只在于：
+     - 创建：按起止区间画 selection preview
+     - 移动：按真实 record payload 画 event block preview
+     这样日 / 周视图都不用再各自维护第二套拖拽 overlay。 */
+  if (!dragState) return;
+  if (dragState.scope === "day") {
+    const layer = ensureTimelinePreviewLayer(refs.dayGridSurface);
+    if (!layer) return;
+    applyPreviewLayerMarkup(layer, renderDaySelectionPreview(dragState.startMinutes, dragState.endMinutes, "day-create-preview"));
+    return;
+  }
+  const surface = refs.weekGrid?.querySelector("#week-grid-surface");
+  const layer = ensureTimelinePreviewLayer(surface);
+  if (!layer) return;
+  const weekDays = timelineDragSession?.geometry?.weekDays?.map((iso) => parseDate(iso)) || [];
+  applyPreviewLayerMarkup(layer, renderWeekSelectionPreview(weekDays, dragState));
+}
+
+function renderTimelineMovePreview(scope, payload, options = {}) {
+  if (!payload) return;
+  if (scope === "day") {
+    renderDayDragMovePreview(payload);
+    return;
+  }
+  const surface = refs.weekGrid?.querySelector("#week-grid-surface");
+  const layer = ensureTimelinePreviewLayer(surface);
+  if (!layer) return;
+  const weekDays = Array.isArray(options.weekDays) && options.weekDays.length
+    ? options.weekDays
+    : (timelineDragSession?.geometry?.weekDays?.map((iso) => parseDate(iso)) || []);
+  const dayCount = weekDays.length;
+  const previewRecord = buildCalendarPreviewRecord(null, payload);
+  applyPreviewLayerMarkup(layer, weekDays.map((day, index) => {
+    const segment = buildTimedEventSegmentForDate(previewRecord, isoDate(day));
+    if (!segment) return "";
+    return renderWeekEventBlock(segment, index, dayCount, { column: 0, columns: 1 }, { preview: true, previewKey: `week-move-preview-${isoDate(day)}` });
+  }).join(""));
+}
+
+function getBoundedTimelineHit(moveEvent, geometry) {
+  if (!geometry?.rect) return null;
+  const { left, right, top, bottom } = geometry.rect;
+  if (moveEvent.clientX < left || moveEvent.clientX > right || moveEvent.clientY < top || moveEvent.clientY > bottom) {
+    return null;
+  }
+  return pointerToTimelineHit(moveEvent.clientX, moveEvent.clientY, geometry);
+}
+
+function finishTimelineDragSession() {
+  if (!timelineDragSession) return;
+  window.removeEventListener("mousemove", timelineDragSession.handleMove);
+  window.removeEventListener("mouseup", timelineDragSession.handleUp);
+  if (timelineDragSession.frame) {
+    cancelAnimationFrame(timelineDragSession.frame);
+  }
+  setTimelineDragSourceClass(timelineDragSession.sourceNode, false);
+  clearTimelinePreview(timelineDragSession.scope);
+  timelineDragSession = null;
+}
+
+function clearAllDayDropAnchors() {
+  document.querySelectorAll(".is-all-day-drop-anchor").forEach((node) => node.classList.remove("is-all-day-drop-anchor"));
+}
+
+function setAllDayDropAnchor(node) {
+  clearAllDayDropAnchors();
+  node?.classList?.add("is-all-day-drop-anchor");
+}
+
+function ensureWeekAllDayPreviewLayer(trackStyle = "") {
+  const host = refs.weekGrid?.querySelector(".week-all-day-content");
+  if (!host) return null;
+  let layer = host.querySelector(".week-all-day-preview-layer");
+  if (!layer) {
+    layer = document.createElement("div");
+    layer.className = "week-all-day-preview-layer";
+    host.appendChild(layer);
+  }
+  if (trackStyle) {
+    const widthMatch = trackStyle.match(/width:\s*([^;]+)/);
+    if (widthMatch?.[1]) {
+      layer.style.width = widthMatch[1].trim();
+    }
+  }
+  return layer;
+}
+
+function clearWeekAllDayPreview() {
+  const layer = refs.weekGrid?.querySelector(".week-all-day-preview-layer");
+  if (layer) layer.innerHTML = "";
+}
+
+function renderWeekAllDayDragPreview(session) {
+  const layer = ensureWeekAllDayPreviewLayer(session.trackStyle || "");
+  if (!layer || !Array.isArray(session.weekDays) || !session.weekDays.length) return;
+  const previewRecord = buildCalendarPreviewRecord(session.record, {
+    ...buildMutableEventPayload(session.record),
+    ...shiftEventDatesByDays(session.record, dayDiff(parseDate(session.sourceDateIso), parseDate(session.currentDateIso))),
+    allDay: true,
+    startTime: "",
+    endTime: "",
+  });
+  const weekStartIso = isoDate(session.weekDays[0]);
+  const weekEndIso = isoDate(session.weekDays[session.weekDays.length - 1]);
+  const startIso = previewRecord.date;
+  const endIso = getEventEndDateIso(previewRecord);
+  const startSlot = refs.weekGrid?.querySelector(`.week-all-day-slot[data-date="${startIso < weekStartIso ? weekStartIso : startIso}"]`);
+  const endSlot = refs.weekGrid?.querySelector(`.week-all-day-slot[data-date="${endIso > weekEndIso ? weekEndIso : endIso}"]`);
+  const hostRect = refs.weekGrid?.querySelector(".week-all-day-content")?.getBoundingClientRect();
+  if (!startSlot || !endSlot || !hostRect) {
+    layer.innerHTML = "";
+    return;
+  }
+  const startRect = startSlot.getBoundingClientRect();
+  const endRect = endSlot.getBoundingClientRect();
+  const viewModel = buildCalendarCardViewModel(previewRecord, { cardKind: "week_all_day", dragKind: "move_all_day" });
+  const lane = Math.max(0, Number(session.previewLane || 0));
+  const markup = `
+    <div
+      class="week-all-day-item week-all-day-drag-preview is-drag-preview${startIso < weekStartIso ? " is-continued-left" : ""}${endIso > weekEndIso ? " is-continued-right" : ""}"
+      data-preview-key="week-all-day-preview"
+      style="left:${startRect.left - hostRect.left}px;top:${4 + lane * 20}px;width:${Math.max(18, endRect.right - startRect.left)}px;${viewModel.accentStyle}"
+    >
+      <span>${escapeHtml(viewModel.title)}</span>
+    </div>
+  `;
+  applyPreviewLayerMarkup(layer, markup);
+}
+
+function getWeekAllDayDateFromPoint(clientX, weekDays) {
+  const content = refs.weekGrid?.querySelector(".week-all-day-content");
+  if (!content || !Array.isArray(weekDays) || !weekDays.length) return "";
+  const rect = content.getBoundingClientRect();
+  const relativeX = Math.max(0, Math.min(rect.width - 1, clientX - rect.left));
+  const dayWidth = rect.width / Math.max(1, weekDays.length);
+  const index = Math.max(0, Math.min(weekDays.length - 1, Math.floor(relativeX / Math.max(1, dayWidth))));
+  return isoDate(weekDays[index]);
+}
+
+function getWeekAllDayPreviewLane(session) {
+  if (!session) return 0;
+  if (session.dropAnchorRecordId) {
+    const anchor = refs.weekGrid?.querySelector(`.week-all-day-item[data-week-event-id="${session.dropAnchorRecordId}"]`);
+    const gridRow = String(anchor?.style?.gridRow || "");
+    const lane = Number(gridRow.split("/")[0]?.trim() || NaN);
+    if (Number.isFinite(lane) && lane > 0) return lane - 1;
+  }
+  const sourceGridRow = String(session.sourceNode?.style?.gridRow || "");
+  const sourceLane = Number(sourceGridRow.split("/")[0]?.trim() || NaN);
+  return Number.isFinite(sourceLane) && sourceLane > 0 ? sourceLane - 1 : 0;
+}
+
+function finishAllDayCardDragSession() {
+  if (!allDayCardDragSession) return;
+  window.removeEventListener("mousemove", allDayCardDragSession.handleMove);
+  window.removeEventListener("mouseup", allDayCardDragSession.handleUp);
+  setTimelineDragSourceClass(allDayCardDragSession.sourceNode, false);
+  clearAllDayDropAnchors();
+  clearWeekAllDayPreview();
+  clearTimelinePreview(allDayCardDragSession.scope);
+  allDayCardDragSession = null;
+}
+
+function commitAllDayReorderOrMove(session, config = {}) {
+  const deltaDays = session.currentDateIso
+    ? dayDiff(parseDate(session.sourceDateIso), parseDate(session.currentDateIso))
+    : 0;
+  let changed = false;
+  if (Number.isFinite(deltaDays) && deltaDays !== 0) {
+    const payload = shiftEventDatesByDays(session.record, deltaDays);
+    if (payload) {
+      updateExistingEvent(payload);
+      changed = true;
+    }
+  }
+  if (session.dropAnchorRecordId) {
+    if (session.dropAnchorMode === "before") {
+      moveRecordBeforeAnchor(session.record.id, session.dropAnchorRecordId);
+    } else {
+      moveRecordAfterAnchor(session.record.id, session.dropAnchorRecordId);
+    }
+    changed = true;
+  }
+  if (!changed) return false;
+  persistState();
+  markSuppressDetailOpen(session.record.id);
+  config.render?.();
+  setStatus(config.statusMessage || "已更新全天事项位置。");
+  return true;
+}
+
+function beginAllDayCardDrag(event, sourceNode, record, config = {}) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  if (event.target.closest("#event-detail-popover")) return;
+  finishAllDayCardDragSession();
+  const sourceDateIso = String(config.getSourceDate?.(record, sourceNode) || record.date || state.selectedDate);
+  const session = {
+    scope: config.scope || "day",
+    record,
+    sourceNode,
+    sourceDateIso,
+    currentDateIso: sourceDateIso,
+    pointerStartX: event.clientX,
+    pointerStartY: event.clientY,
+    didMove: false,
+    mode: "all_day",
+    previewPayload: null,
+    dropAnchorRecordId: "",
+    dropAnchorMode: "after",
+    previewLane: 0,
+    weekDays: config.weekDays || [],
+    trackStyle: config.trackStyle || "",
+    handleMove: null,
+    handleUp: null,
+  };
+  session.handleMove = (moveEvent) => {
+    const deltaX = Math.abs(moveEvent.clientX - session.pointerStartX);
+    const deltaY = Math.abs(moveEvent.clientY - session.pointerStartY);
+    if (!session.didMove && deltaX < 4 && deltaY < 4) return;
+    if (!session.didMove) {
+      session.didMove = true;
+      setTimelineDragSourceClass(session.sourceNode, true);
+    }
+    const timelineHit = config.getTimelineHit?.(moveEvent) || null;
+    if (timelineHit) {
+      session.mode = "timeline";
+      session.previewPayload = convertAllDayRecordToTimedPayload(session.record, timelineHit.dateIso, timelineHit.minutes, 60);
+      clearAllDayDropAnchors();
+      clearWeekAllDayPreview();
+      renderTimelineMovePreview(session.scope, session.previewPayload, {
+        weekDays: session.weekDays,
+      });
+      return;
+    }
+    session.mode = "all_day";
+    session.previewPayload = null;
+    clearTimelinePreview(session.scope);
+    const nextDateIso = String(config.getAllDayDate?.(moveEvent) || session.sourceDateIso);
+    session.currentDateIso = nextDateIso;
+    const anchor = config.getDropAnchor?.(moveEvent, session) || null;
+    session.dropAnchorRecordId = String(anchor?.recordId || "");
+    session.dropAnchorMode = anchor?.mode === "before" ? "before" : "after";
+    session.previewLane = Number(anchor?.lane ?? session.previewLane ?? 0) || 0;
+    setAllDayDropAnchor(anchor?.node || null);
+    config.renderAllDayPreview?.(session);
+  };
+  session.handleUp = () => {
+    const dragSession = allDayCardDragSession;
+    finishAllDayCardDragSession();
+    if (!dragSession?.didMove) return;
+    suppressSurfaceClick();
+    if (dragSession.mode === "timeline" && dragSession.previewPayload) {
+      config.commitTimeline?.(dragSession.record, dragSession.previewPayload);
+      return;
+    }
+    config.commitAllDay?.(dragSession);
+  };
+  allDayCardDragSession = session;
+  window.addEventListener("mousemove", session.handleMove);
+  window.addEventListener("mouseup", session.handleUp, { once: true });
+}
+
+function queueTimelineDragFrame() {
+  /* 共享拖拽引擎的关键节流点：
+     mousemove 只更新“最新鼠标事件”，真正的命中换算和预览刷新统一压到 rAF。
+     同时再加一层“只有跨进新时间槽才更新”的判断，避免同一吸附格里反复重算。 */
+  if (!timelineDragSession || timelineDragSession.frame) return;
+  timelineDragSession.frame = requestAnimationFrame(() => {
+    const session = timelineDragSession;
+    if (!session) return;
+    session.frame = 0;
+    const latestEvent = session.pendingEvent;
+    if (!latestEvent) return;
+    const nextHit = pointerToTimelineHit(latestEvent.clientX, latestEvent.clientY, session.geometry);
+    if (!nextHit) return;
+    const deltaX = Math.abs(latestEvent.clientX - session.pointerStartX);
+    const deltaY = Math.abs(latestEvent.clientY - session.pointerStartY);
+    if (!session.didMove && deltaX < 4 && deltaY < 4) return;
+    if (!session.didMove) {
+      session.didMove = true;
+      if (session.scope === "week") {
+        captureWeekPreviewViewport();
+      }
+      setTimelineDragSourceClass(session.sourceNode, true);
+    }
+    if (session.mode === "create") {
+      const nextPreviewKey = `${nextHit.dateIso}|${nextHit.minutes}`;
+      if (session.lastPreviewKey === nextPreviewKey) return;
+      session.lastPreviewKey = nextPreviewKey;
+      if (session.scope === "week") {
+        session.dragState.endDateIso = nextHit.dateIso;
+      }
+      session.dragState.endMinutes = nextHit.minutes;
+      renderTimelineCreatePreview(session.dragState);
+      return;
+    }
+    const nextTimestamp = timelineHitToTimestamp(nextHit.dateIso, nextHit.minutes);
+    if (!Number.isFinite(nextTimestamp)) return;
+    const deltaMinutes = Math.round((nextTimestamp - session.dragState.hitTimestamp) / 60000);
+    if (session.lastPreviewDeltaMinutes === deltaMinutes) return;
+    session.lastPreviewDeltaMinutes = deltaMinutes;
+    const previewPayload = moveTimedEventByMinutes(session.record, deltaMinutes);
+    if (!previewPayload) return;
+    session.dragState.previewPayload = previewPayload;
+    renderTimelineMovePreview(session.scope, previewPayload);
+  });
+}
+
+function beginTimelineCreateDrag(event, config) {
+  /* 所有“从空白时间轴拖出一个新区间”的入口都走这里。
+     视图只需要提供三件事：
+     1. 如何拿几何信息
+     2. 如何构造初始拖拽态
+     3. mouseup 后怎么提交 */
+  if (event.button !== 0) return;
+  event.preventDefault();
+  if (event.target.closest(config.blockSelector)) return;
+  if (event.target.closest("#event-detail-popover")) return;
+  const geometry = config.getGeometry();
+  const startHit = pointerToTimelineHit(event.clientX, event.clientY, geometry);
+  if (!geometry || !startHit) return;
+  finishTimelineDragSession();
+  const dragState = config.buildInitialState(startHit, event);
+  timelineDragSession = {
+    scope: config.scope,
+    mode: "create",
+    geometry,
+    pointerStartX: event.clientX,
+    pointerStartY: event.clientY,
+    pendingEvent: null,
+    frame: 0,
+    didMove: false,
+    dragState,
+    sourceNode: null,
+    record: null,
+    lastPreviewKey: "",
+    lastPreviewDeltaMinutes: Number.NaN,
+  };
+  const handleMove = (moveEvent) => {
+    if (!timelineDragSession) return;
+    timelineDragSession.pendingEvent = moveEvent;
+    queueTimelineDragFrame();
+  };
+  const handleUp = () => {
+    const session = timelineDragSession;
+    if (!session) return;
+    if (!session.didMove) {
+      finishTimelineDragSession();
+      return;
+    }
+    const drag = session.dragState;
+    finishTimelineDragSession();
+    config.commit(drag);
+  };
+  timelineDragSession.handleMove = handleMove;
+  timelineDragSession.handleUp = handleUp;
+  window.addEventListener("mousemove", handleMove);
+  window.addEventListener("mouseup", handleUp, { once: true });
+}
+
+function beginTimelineMoveDrag(event, sourceNode, record, config) {
+  /* 所有“拖拽已有定时卡片改时间”的入口都走这里。
+     与 beginTimelineCreateDrag 共享同一套坐标换算 / 合帧 / 预览层，
+     只是最终的预览内容换成了“平移后的真实卡片”。 */
+  if (event.button !== 0) return;
+  event.preventDefault();
+  if (event.target.closest("#event-detail-popover")) return;
+  const geometry = config.getGeometry();
+  const startHit = pointerToTimelineHit(event.clientX, event.clientY, geometry);
+  const hitTimestamp = startHit ? timelineHitToTimestamp(startHit.dateIso, startHit.minutes) : NaN;
+  if (!geometry || !startHit || !Number.isFinite(hitTimestamp)) return;
+  finishTimelineDragSession();
+  const dragState = {
+    scope: config.scope,
+    recordId: record.id,
+    hitTimestamp,
+    pointerStartX: event.clientX,
+    pointerStartY: event.clientY,
+    didMove: false,
+    previewPayload: null,
+  };
+  timelineDragSession = {
+    scope: config.scope,
+    mode: "move",
+    geometry,
+    pointerStartX: event.clientX,
+    pointerStartY: event.clientY,
+    pendingEvent: null,
+    frame: 0,
+    didMove: false,
+    dragState,
+    sourceNode,
+    record,
+    lastPreviewKey: "",
+    lastPreviewDeltaMinutes: Number.NaN,
+  };
+  const handleMove = (moveEvent) => {
+    if (!timelineDragSession) return;
+    timelineDragSession.pendingEvent = moveEvent;
+    queueTimelineDragFrame();
+  };
+  const handleUp = () => {
+    const session = timelineDragSession;
+    if (!session) return;
+    const previewPayload = session.dragState.previewPayload;
+    const didMove = session.didMove;
+    finishTimelineDragSession();
+    if (!didMove || !previewPayload) return;
+    config.commit(record, previewPayload);
+  };
+  timelineDragSession.handleMove = handleMove;
+  timelineDragSession.handleUp = handleUp;
+  window.addEventListener("mousemove", handleMove);
+  window.addEventListener("mouseup", handleUp, { once: true });
+}
+
 /* 全天 -> 定时 的转换 payload。
    先不直接接 UI，只把规则固定下来：
    - 落在哪一天、哪一分钟开始
@@ -1634,6 +2395,19 @@ function moveRecordAfterAnchor(recordId, anchorRecordId) {
   const [record] = list.splice(recordIndex, 1);
   const nextAnchorIndex = list.findIndex((item) => item.id === anchorRecordId);
   list.splice(nextAnchorIndex + 1, 0, record);
+  state.derivedView.signature = "";
+}
+
+function moveRecordBeforeAnchor(recordId, anchorRecordId) {
+  if (!recordId || !anchorRecordId || recordId === anchorRecordId) return;
+  const list = Array.isArray(state.db.records) ? state.db.records : [];
+  const recordIndex = list.findIndex((item) => item.id === recordId);
+  const anchorIndex = list.findIndex((item) => item.id === anchorRecordId);
+  if (recordIndex < 0 || anchorIndex < 0) return;
+  const [record] = list.splice(recordIndex, 1);
+  const nextAnchorIndex = list.findIndex((item) => item.id === anchorRecordId);
+  list.splice(Math.max(0, nextAnchorIndex), 0, record);
+  state.derivedView.signature = "";
 }
 
 /* 轻量全天事项的统一新建入口：
@@ -1670,98 +2444,226 @@ function createSingleDayAllDayQuickEntry(dateIso, options = {}) {
   return event;
 }
 
-function activateMonthQuickEntry(record, options = {}) {
-  if (!record || !isMonthQuickEditableRecord(record)) return;
-  /* 进入快速输入前先记住当前月视图滚动位置。
-     因为接下来会 renderCalendar，若不先存锚点，视口可能被恢复到错误的月份/周。 */
-  if (options.render !== false) {
-    preserveMonthScrollerPosition();
-  }
-  state.monthQuickEntry = {
-    recordId: record.id,
-    date: record.date || state.selectedDate,
-    draftTitle: options.draftTitle ?? String(record.title || ""),
-    focusToken: state.monthQuickEntry.focusToken + 1,
-  };
-  if (options.render !== false) {
-    renderCalendar();
-  }
+/* 月 / 周 / 日三处“全天快速输入”本质上是同一类临时编辑态：
+   只是在保存前，把一条单天全天事项临时变成 input。
+   这里把公共状态读写收口，避免三份实现继续漂移。 */
+function getScopedQuickEntryRecord(stateKey) {
+  const entry = state[stateKey];
+  return entry?.recordId ? getRecordById(entry.recordId) : null;
 }
 
-function finishMonthQuickEntry(options = {}) {
-  const active = getMonthQuickEntryRecord();
-  if (!active) {
-    clearMonthQuickEntry();
-    return;
-  }
-  /* “退出快速输入”有两步：
-     1. 用当前草稿标题落库；如果是空标题，内部会用默认名兜底
-     2. 清掉月视图临时输入态，并按周锚点把滚动位置恢复回去 */
-  if (options.render !== false) {
-    preserveMonthScrollerPosition();
-  }
-  const draftTitle = options.title ?? state.monthQuickEntry.draftTitle;
-  persistMonthQuickEntryTitle(active.id, draftTitle);
-  clearMonthQuickEntry();
-  if (options.render !== false) {
-    renderCalendar();
-  }
-}
-
-function handleMonthQuickEntrySubmit(recordId, rawTitle = state.monthQuickEntry.draftTitle) {
-  const current = getRecordById(recordId);
-  if (!current || !isMonthQuickEditableRecord(current)) {
-    clearMonthQuickEntry();
-    preserveMonthScrollerPosition();
-    renderCalendar();
-    return;
-  }
-  /* 回车连续创建时，优先读取当前 input 的实时值，而不是完全依赖 state 里的草稿。
-     这样可以避开输入法确认 / 高频键入时 input 事件与重绘之间的时序差，避免“只连续创建一次就退出”。 */
-  const typedTitle = String(rawTitle || "").trim();
-  const normalized = typedTitle || "新建日程";
-  preserveMonthScrollerPosition();
-  persistMonthQuickEntryTitle(recordId, normalized);
-  /* 月视图 quick-entry 现在遵循“回车永远继续下一条”：
-     即使当前标题为空，也先用默认标题落库，再在同一天继续创建下一条，
-     让整套交互更接近清单应用里的连续录入。 */
-  const next = createSingleDayAllDayQuickEntry(current.date, {
-    afterRecordId: recordId,
-    initialTitle: "新建日程",
-    sourceType: "month_quick_entry",
-  });
-  activateMonthQuickEntry(next, { draftTitle: "", render: true });
-}
-
-function moveMonthQuickEntryFocus(recordId, offset, rawTitle = state.monthQuickEntry.draftTitle) {
-  if (!refs.calendarGrid) return false;
-  /* 上下键切换沿用“当前屏幕上看到的条带顺序”：
-     直接从 DOM 中收集可快速编辑的全天事项，比再维护一份平行排序更稳，
-     也能保证月视图里光标移动方向和用户视觉顺序一致。 */
-  const entries = Array.from(refs.calendarGrid.querySelectorAll("[data-month-all-day-event-id][data-month-single-all-day='true'], [data-month-quick-entry]"));
-  const currentIndex = entries.findIndex((node) => String(node.dataset.monthAllDayEventId || node.dataset.monthQuickEntry || "") === String(recordId));
-  if (currentIndex < 0) return false;
-  const nextIndex = currentIndex + offset;
-  if (nextIndex < 0 || nextIndex >= entries.length) return false;
-  persistMonthQuickEntryTitle(recordId, rawTitle);
-  const targetId = String(entries[nextIndex].dataset.monthAllDayEventId || entries[nextIndex].dataset.monthQuickEntry || "");
-  const targetRecord = getRecordById(targetId);
-  if (!targetRecord || !isMonthQuickEditableRecord(targetRecord)) return false;
-  activateMonthQuickEntry(targetRecord, { draftTitle: String(targetRecord.title || ""), render: true });
-  return true;
-}
-
-function getWeekQuickEntryRecord() {
-  return state.weekQuickEntry.recordId ? getRecordById(state.weekQuickEntry.recordId) : null;
-}
-
-function clearWeekQuickEntry() {
-  state.weekQuickEntry = {
+function clearScopedQuickEntryState(stateKey) {
+  state[stateKey] = {
     recordId: "",
     date: "",
     draftTitle: "",
     focusToken: 0,
   };
+}
+
+function activateScopedQuickEntry(stateKey, record, options = {}, config = {}) {
+  if (!record || !isMonthQuickEditableRecord(record)) return;
+  if (options.render !== false) {
+    config.preserveView?.();
+  }
+  const previous = state[stateKey] || {};
+  state[stateKey] = {
+    recordId: record.id,
+    date: record.date || state.selectedDate,
+    draftTitle: options.draftTitle ?? String(record.title || ""),
+    /* focusToken 每次递增，作为“这次渲染后应该聚焦哪一个 input”的一次性票据。
+       这样就算 render 连续发生多次，也只会让最新一次激活的输入框拿到焦点。 */
+    focusToken: Number(previous.focusToken || 0) + 1,
+  };
+  if (options.render !== false) {
+    config.render?.();
+  }
+}
+
+function finishScopedQuickEntry(stateKey, options = {}, config = {}) {
+  const active = getScopedQuickEntryRecord(stateKey);
+  if (!active) {
+    clearScopedQuickEntryState(stateKey);
+    return;
+  }
+  if (options.render !== false) {
+    config.preserveView?.();
+  }
+  const draftTitle = options.title ?? state[stateKey].draftTitle;
+  persistMonthQuickEntryTitle(active.id, draftTitle);
+  clearScopedQuickEntryState(stateKey);
+  if (options.render !== false) {
+    config.render?.();
+  }
+}
+
+function handleScopedQuickEntrySubmit(stateKey, recordId, rawTitle, config = {}) {
+  const current = getRecordById(recordId);
+  if (!current || !isMonthQuickEditableRecord(current)) {
+    clearScopedQuickEntryState(stateKey);
+    config.preserveView?.();
+    config.render?.();
+    return;
+  }
+  /* 回车连续录入时优先信任当前 input 的实时值。
+     这样可以绕开输入法确认、快速键入和 render 之间的时序竞争。 */
+  const typedTitle = String(rawTitle || "").trim();
+  const normalized = typedTitle || "新建日程";
+  config.preserveView?.();
+  persistMonthQuickEntryTitle(recordId, normalized);
+  const next = createSingleDayAllDayQuickEntry(current.date, {
+    afterRecordId: recordId,
+    initialTitle: "新建日程",
+    sourceType: config.sourceType || "month_quick_entry",
+  });
+  config.activate(next, { draftTitle: "", render: true });
+}
+
+function moveScopedQuickEntryFocus(recordId, offset, rawTitle, config = {}) {
+  const root = config.root;
+  if (!root) return false;
+  const entries = Array.from(root.querySelectorAll(config.entrySelector));
+  const currentIndex = entries.findIndex((node) => String(config.getEntryId(node)) === String(recordId));
+  if (currentIndex < 0) return false;
+  const nextIndex = currentIndex + offset;
+  if (nextIndex < 0 || nextIndex >= entries.length) return false;
+  persistMonthQuickEntryTitle(recordId, rawTitle);
+  const targetId = String(config.getEntryId(entries[nextIndex]) || "");
+  const targetRecord = getRecordById(targetId);
+  if (!targetRecord || !isMonthQuickEditableRecord(targetRecord)) return false;
+  config.activate(targetRecord, { draftTitle: String(targetRecord.title || ""), render: true });
+  return true;
+}
+
+/* 三个视图的全天快速输入现在都走同一套 DOM 事件绑定：
+   - input: 同步草稿，并在用户开始键入时收起详情卡片
+   - Enter: 落库当前标题并继续创建下一条
+   - ArrowUp / ArrowDown: 按当前视觉顺序移动焦点
+   - 空标题 Backspace/Delete: 删除该空白事项
+   - blur: 只有确认不是切到另一条 quick-entry，才兜底结束编辑 */
+function bindScopedQuickEntryInputs(config) {
+  const root = config.root;
+  if (!root) return;
+  root.querySelectorAll(config.inputSelector).forEach((input) => {
+    const recordId = input.getAttribute(config.recordIdAttribute) || "";
+    input.addEventListener("input", () => {
+      config.setDraft(recordId, input.value);
+      if (state.eventDetailPopover?.recordId === recordId) {
+        closeEventDetailPopover({ statusMessage: "" });
+      }
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        config.submit(recordId, input.value);
+        return;
+      }
+      if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+        const moved = config.moveFocus(recordId, event.key === "ArrowUp" ? -1 : 1, input.value);
+        if (moved) {
+          event.preventDefault();
+        }
+        return;
+      }
+      if ((event.key === "Backspace" || event.key === "Delete") && !input.value.trim()) {
+        event.preventDefault();
+        const deleted = deleteEventRecordById(recordId, {
+          closePopover: true,
+          statusMessage: "已删除空白全天事项。",
+        });
+        if (deleted) {
+          config.clear();
+        }
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        config.finish();
+      }
+    });
+    input.addEventListener("blur", () => {
+      window.setTimeout(() => {
+        const activeElement = document.activeElement;
+        if (activeElement?.matches?.(config.inputSelector)) return;
+        if (allDayQuickEntryPointerTarget) return;
+        if (config.getState().recordId === recordId) {
+          config.finish({ title: input.value });
+        }
+      }, 0);
+    });
+  });
+
+  const quickState = config.getState();
+  if (quickState.focusToken && quickState.recordId) {
+    requestAnimationFrame(() => {
+      const latestState = config.getState();
+      if (quickState.focusToken !== latestState.focusToken) return;
+      const input = root.querySelector(`${config.inputSelector}[${config.recordIdAttribute}="${latestState.recordId}"]`);
+      if (!input) return;
+      input.focus();
+      if (input.value) {
+        input.setSelectionRange(input.value.length, input.value.length);
+      }
+    });
+  }
+}
+
+function activateMonthQuickEntry(record, options = {}) {
+  /* 月视图需要在 render 前先记住 scroller 锚点，否则快速输入会把月份窗口恢复错位。 */
+  activateScopedQuickEntry("monthQuickEntry", record, options, {
+    render: renderCalendar,
+    preserveView: preserveMonthScrollerPosition,
+  });
+}
+
+function finishMonthQuickEntry(options = {}) {
+  /* “退出快速输入”有两步：
+     1. 用当前草稿标题落库；如果是空标题，内部会用默认名兜底
+     2. 清掉月视图临时输入态，并按周锚点把滚动位置恢复回去 */
+  finishScopedQuickEntry("monthQuickEntry", options, {
+    render: renderCalendar,
+    preserveView: preserveMonthScrollerPosition,
+  });
+}
+
+function handleMonthQuickEntrySubmit(recordId, rawTitle = state.monthQuickEntry.draftTitle) {
+  /* 月视图 quick-entry 现在遵循“回车永远继续下一条”：
+     即使当前标题为空，也先用默认标题落库，再在同一天继续创建下一条，
+     让整套交互更接近清单应用里的连续录入。 */
+  handleScopedQuickEntrySubmit("monthQuickEntry", recordId, rawTitle, {
+    render: renderCalendar,
+    preserveView: preserveMonthScrollerPosition,
+    activate: activateMonthQuickEntry,
+    sourceType: "month_quick_entry",
+  });
+}
+
+function moveMonthQuickEntryFocus(recordId, offset, rawTitle = state.monthQuickEntry.draftTitle) {
+  /* 上下键切换沿用“当前屏幕上看到的条带顺序”：
+     直接从 DOM 中收集可快速编辑的全天事项，比再维护一份平行排序更稳，
+     也能保证月视图里光标移动方向和用户视觉顺序一致。 */
+  return moveScopedQuickEntryFocus(recordId, offset, rawTitle, {
+    root: refs.calendarGrid,
+    entrySelector: "[data-month-all-day-event-id][data-month-single-all-day='true'], [data-month-quick-entry]",
+    getEntryId: (node) => node.dataset.monthAllDayEventId || node.dataset.monthQuickEntry || "",
+    activate: activateMonthQuickEntry,
+  });
+}
+
+function getWeekQuickEntryRecord() {
+  return getScopedQuickEntryRecord("weekQuickEntry");
+}
+
+function clearWeekQuickEntry() {
+  clearScopedQuickEntryState("weekQuickEntry");
+}
+
+function getDayQuickEntryRecord() {
+  return getScopedQuickEntryRecord("dayQuickEntry");
+}
+
+function clearDayQuickEntry() {
+  clearScopedQuickEntryState("dayQuickEntry");
 }
 
 /* 周视图滚动骨架分成三层：
@@ -1814,81 +2716,100 @@ function restoreWeekPreviewViewport() {
 }
 
 function activateWeekQuickEntry(record, options = {}) {
-  if (!record || !isMonthQuickEditableRecord(record)) return;
-  if (options.render !== false) {
-    preserveWeekPanePosition();
-  }
-  state.weekQuickEntry = {
-    recordId: record.id,
-    date: record.date || state.selectedDate,
-    draftTitle: options.draftTitle ?? String(record.title || ""),
-    focusToken: state.weekQuickEntry.focusToken + 1,
-  };
-  if (options.render !== false) {
-    renderWeekView();
-  }
+  activateScopedQuickEntry("weekQuickEntry", record, options, {
+    render: renderWeekView,
+    preserveView: preserveWeekPanePosition,
+  });
 }
 
 function finishWeekQuickEntry(options = {}) {
-  const active = getWeekQuickEntryRecord();
-  if (!active) {
-    clearWeekQuickEntry();
-    return;
-  }
-  if (options.render !== false) {
-    preserveWeekPanePosition();
-  }
-  const draftTitle = options.title ?? state.weekQuickEntry.draftTitle;
-  persistMonthQuickEntryTitle(active.id, draftTitle);
-  clearWeekQuickEntry();
-  if (options.render !== false) {
-    renderWeekView();
-  }
+  finishScopedQuickEntry("weekQuickEntry", options, {
+    render: renderWeekView,
+    preserveView: preserveWeekPanePosition,
+  });
 }
 
 function handleWeekQuickEntrySubmit(recordId, rawTitle = state.weekQuickEntry.draftTitle) {
-  const current = getRecordById(recordId);
-  if (!current || !isMonthQuickEditableRecord(current)) {
-    clearWeekQuickEntry();
-    preserveWeekPanePosition();
-    renderWeekView();
-    return;
-  }
   /* 周视图顶部全天栏和月视图共享同一套“回车继续生下一条”的手感目标。
      这里同样优先读取当前输入框的实时值，避免第二条开始后因为 state 草稿滞后而被误判为空标题。 */
-  const typedTitle = String(rawTitle || "").trim();
-  const normalized = typedTitle || "新建日程";
-  preserveWeekPanePosition();
-  persistMonthQuickEntryTitle(recordId, normalized);
   /* 周视图顶部全天栏与月视图保持同一规则：空标题回车也继续下一条。 */
-  const next = createSingleDayAllDayQuickEntry(current.date, {
-    afterRecordId: recordId,
-    initialTitle: "新建日程",
+  handleScopedQuickEntrySubmit("weekQuickEntry", recordId, rawTitle, {
+    render: renderWeekView,
+    preserveView: preserveWeekPanePosition,
+    activate: activateWeekQuickEntry,
     sourceType: "week_quick_entry",
   });
-  activateWeekQuickEntry(next, { draftTitle: "", render: true });
 }
 
 function moveWeekQuickEntryFocus(recordId, offset, rawTitle = state.weekQuickEntry.draftTitle) {
-  if (!refs.weekGrid) return false;
   /* 周视图顶部全天栏同样按当前渲染顺序移动光标。
      这里只在现有单天全天事项之间切换；越界时什么都不做，保持原位。 */
-  const entries = Array.from(refs.weekGrid.querySelectorAll("[data-week-all-day-event-id][data-week-single-all-day='true'], [data-week-quick-entry]"));
-  const currentIndex = entries.findIndex((node) => String(node.dataset.weekAllDayEventId || node.dataset.weekQuickEntry || "") === String(recordId));
-  if (currentIndex < 0) return false;
-  const nextIndex = currentIndex + offset;
-  if (nextIndex < 0 || nextIndex >= entries.length) return false;
-  persistMonthQuickEntryTitle(recordId, rawTitle);
-  const targetId = String(entries[nextIndex].dataset.weekAllDayEventId || entries[nextIndex].dataset.weekQuickEntry || "");
-  const targetRecord = getRecordById(targetId);
-  if (!targetRecord || !isMonthQuickEditableRecord(targetRecord)) return false;
-  activateWeekQuickEntry(targetRecord, { draftTitle: String(targetRecord.title || ""), render: true });
-  return true;
+  return moveScopedQuickEntryFocus(recordId, offset, rawTitle, {
+    root: refs.weekGrid,
+    entrySelector: "[data-week-all-day-event-id][data-week-single-all-day='true'], [data-week-quick-entry]",
+    getEntryId: (node) => node.dataset.weekAllDayEventId || node.dataset.weekQuickEntry || "",
+    activate: activateWeekQuickEntry,
+  });
+}
+
+function activateDayQuickEntry(record, options = {}) {
+  /* 日视图现在和周视图共享同一类快速输入语义：
+     只是在日视图里不需要额外保存滚动锚点，因此 preserveView 留空。 */
+  activateScopedQuickEntry("dayQuickEntry", record, options, {
+    render: renderDayView,
+  });
+}
+
+function finishDayQuickEntry(options = {}) {
+  finishScopedQuickEntry("dayQuickEntry", options, {
+    render: renderDayView,
+  });
+}
+
+function handleDayQuickEntrySubmit(recordId, rawTitle = state.dayQuickEntry.draftTitle) {
+  handleScopedQuickEntrySubmit("dayQuickEntry", recordId, rawTitle, {
+    render: renderDayView,
+    activate: activateDayQuickEntry,
+    sourceType: "day_quick_entry",
+  });
+}
+
+function moveDayQuickEntryFocus(recordId, offset, rawTitle = state.dayQuickEntry.draftTitle) {
+  /* 日视图这里也改成复用同一套“按当前 DOM 顺序移动焦点”逻辑，
+     避免保留早期那套只在日视图单独维护的旧焦点代码。 */
+  return moveScopedQuickEntryFocus(recordId, offset, rawTitle, {
+    root: refs.dayAllDayStrip,
+    entrySelector: "[data-day-all-day-event-id][data-day-single-all-day='true'], [data-day-quick-entry]",
+    getEntryId: (node) => node.dataset.dayAllDayEventId || node.dataset.dayQuickEntry || "",
+    activate: activateDayQuickEntry,
+  });
+}
+
+function bindDayQuickEntryInputs() {
+  bindScopedQuickEntryInputs({
+    root: refs.dayAllDayStrip,
+    inputSelector: "[data-day-quick-input]",
+    recordIdAttribute: "data-day-quick-input",
+    getState: () => state.dayQuickEntry,
+    setDraft: (recordId, draftTitle) => {
+      state.dayQuickEntry = {
+        ...state.dayQuickEntry,
+        recordId,
+        draftTitle,
+      };
+    },
+    submit: handleDayQuickEntrySubmit,
+    moveFocus: moveDayQuickEntryFocus,
+    finish: finishDayQuickEntry,
+    clear: clearDayQuickEntry,
+  });
 }
 
 function renderMonthDay(day, monthStart, laneCount = 0) {
   const dayIso = isoDate(day);
-  const events = getEventsForDate(dayIso).filter((event) => !isAllDayLikeRecord(event)).slice(0, 2);
+  const timedEvents = getEventsForDate(dayIso).filter((event) => !isAllDayLikeRecord(event));
+  const visibleEvents = timedEvents.slice(0, MONTH_TIMED_EVENT_VISIBLE_LIMIT);
+  const hiddenTimedCount = Math.max(0, timedEvents.length - visibleEvents.length);
   const isToday = dayIso === isoDate(new Date());
   const isSelected = dayIso === state.selectedDate;
   const isOtherMonth = day.getMonth() !== monthStart.getMonth();
@@ -1896,15 +2817,16 @@ function renderMonthDay(day, monthStart, laneCount = 0) {
   return `
     <article class="calendar-day ${isToday ? "is-today" : ""} ${isSelected ? "is-selected" : ""} ${isOtherMonth ? "is-other-month" : ""}" data-date="${dayIso}" style="--month-bar-slot-height:${Math.max(0, laneCount) * 20}px;">
       <div class="calendar-day-header">
-        <span>${day.getDate()}</span>
+        <span class="calendar-day-date${isToday ? " is-today-badge" : ""}">${day.getDate()}</span>
         <span class="chip">${getEventsForDate(dayIso).length}</span>
       </div>
       <div class="month-bar-slot" aria-hidden="true"></div>
       <div class="day-events">
-        ${events.map((event) => {
+        ${visibleEvents.map((event) => {
           const viewModel = buildCalendarCardViewModel(event, { cardKind: "month_inline", dragKind: "move_timed" });
-          return `<button class="event-chip month-inline-chip" data-month-event-id="${event.id}" data-anchor-date="${dayIso}" data-event-detail-trigger="month-inline" ${buildCalendarCardDataAttributes(viewModel)} type="button" style="${viewModel.accentStyle}">${escapeHtml(formatEventChip(viewModel))}</button>`;
+          return `<button class="event-chip month-inline-chip${state.editingEventId === event.id ? " is-selected" : ""}" data-month-event-id="${event.id}" data-anchor-date="${dayIso}" data-event-detail-trigger="month-inline" ${buildCalendarCardDataAttributes(viewModel)} type="button" style="${viewModel.accentStyle}">${escapeHtml(formatEventChip(viewModel))}</button>`;
         }).join("")}
+        ${hiddenTimedCount > 0 ? `<div class="month-inline-overflow">+${hiddenTimedCount}</div>` : ""}
       </div>
     </article>
   `;
@@ -1948,21 +2870,33 @@ function renderMonthWeekRow(weekDays, monthStart) {
   `;
 }
 
+function sortAllDayRecordsForCompactLanes(records = []) {
+  const recordOrder = new Map(
+    (Array.isArray(state.db.records) ? state.db.records : []).map((record, index) => [record.id, index]),
+  );
+  /* 全天事项排布现在统一改成“区间最小高度”导向：
+     1. 先按开始日期升序，让更早开始的事项先占位
+     2. 同一天开始时，让跨度更长的先放，避免长条被后来的短条挤到更低 lane
+     3. 再用 records 当前顺序做稳定排序，给人工拖动排序留出可控空间
+     然后再执行“放入第一个可用 lane”的贪心分配。
+     这比单纯按跨度降序更接近 Apple 日历那种整体高度更低的布局。 */
+  return [...records].sort((left, right) => {
+    const startDiff = String(left.date || "").localeCompare(String(right.date || ""));
+    if (startDiff !== 0) return startDiff;
+    const leftSpan = dayDiff(parseDate(left.date), parseDate(getEventEndDateIso(left))) + 1;
+    const rightSpan = dayDiff(parseDate(right.date), parseDate(getEventEndDateIso(right))) + 1;
+    if (leftSpan !== rightSpan) return rightSpan - leftSpan;
+    return (recordOrder.get(left.id) || 0) - (recordOrder.get(right.id) || 0);
+  });
+}
+
 function buildMonthWeekBars(weekDays) {
   const weekStartIso = isoDate(weekDays[0]);
   const weekEndIso = isoDate(weekDays[weekDays.length - 1]);
-  /* 全天条带排序沿用现有规则：
-     - 跨天更长的优先占上层
-     - 同跨度时按开始日期排序
-     月视图快速输入只是复用这层渲染，不单独发明第二套“全天布局系统”。 */
-  const allDayRecords = getActiveRecordsByType("calendar")
-    .filter((record) => record.date && isAllDayLikeRecord(record) && getEventEndDateIso(record) >= weekStartIso && record.date <= weekEndIso)
-    .sort((left, right) => {
-      const leftSpan = dayDiff(parseDate(left.date), parseDate(getEventEndDateIso(left))) + 1;
-      const rightSpan = dayDiff(parseDate(right.date), parseDate(getEventEndDateIso(right))) + 1;
-      if (leftSpan !== rightSpan) return rightSpan - leftSpan;
-      return left.date.localeCompare(right.date);
-    });
+  const allDayRecords = sortAllDayRecordsForCompactLanes(
+    getActiveRecordsByType("calendar")
+      .filter((record) => record.date && isAllDayLikeRecord(record) && getEventEndDateIso(record) >= weekStartIso && record.date <= weekEndIso)
+  );
 
   const lanes = [];
   const bars = allDayRecords.map((record) => {
@@ -1977,7 +2911,12 @@ function buildMonthWeekBars(weekDays) {
     if (endIndex < 0 || startIndex > 6) return "";
 
     let lane = 0;
-    while (lanes[lane] && lanes[lane] >= startIndex) lane += 1;
+    /* 这里不能用 truthy 判断。
+       因为第一列的单天事项 endIndex 会是 0，而 0 在 JS 里是 falsy，
+       之前会导致所有“落在第一列且结束于第一列”的事项都被重复塞进同一个 lane，
+       视觉上就像第一格永远只显示一条，点击/双击命中也会混乱。
+       必须显式判断 lane 是否已被占用。 */
+    while (lanes[lane] != null && lanes[lane] >= startIndex) lane += 1;
     lanes[lane] = endIndex;
 
     // 同一条记录在月视图里有两种外观：
@@ -1989,6 +2928,7 @@ function buildMonthWeekBars(weekDays) {
           class="month-span-bar is-editing${startIso < weekStartIso ? " is-continued-left" : ""}${endIso > weekEndIso ? " is-continued-right" : ""}"
           data-month-event-id="${record.id}"
           data-month-quick-entry="${record.id}"
+          data-month-lane="${lane}"
           data-anchor-date="${anchorIso}"
           ${buildCalendarCardDataAttributes(viewModel)}
           style="${gridStyle}"
@@ -2006,10 +2946,11 @@ function buildMonthWeekBars(weekDays) {
     }
     return `
       <button
-        class="month-span-bar${singleDayQuickEditable ? " is-quick-editable" : ""}${startIso < weekStartIso ? " is-continued-left" : ""}${endIso > weekEndIso ? " is-continued-right" : ""}"
+        class="month-span-bar${singleDayQuickEditable ? " is-quick-editable" : ""}${startIso < weekStartIso ? " is-continued-left" : ""}${endIso > weekEndIso ? " is-continued-right" : ""}${state.editingEventId === record.id ? " is-selected" : ""}"
         data-month-event-id="${record.id}"
         data-month-all-day-event-id="${record.id}"
         data-month-single-all-day="${singleDayQuickEditable ? "true" : "false"}"
+        data-month-lane="${lane}"
         data-anchor-date="${anchorIso}"
         data-event-detail-trigger="month-span"
         ${buildCalendarCardDataAttributes(viewModel)}
@@ -2028,11 +2969,390 @@ function buildMonthWeekBars(weekDays) {
   };
 }
 
+/* ---------- Month Drag Helpers ---------- */
+
+function getMonthDayCellFromPoint(clientX, clientY) {
+  const element = document.elementFromPoint(clientX, clientY);
+  return element?.closest?.(".calendar-day[data-date]") || null;
+}
+
+function getMonthBarFromPoint(clientX, clientY) {
+  const element = document.elementFromPoint(clientX, clientY);
+  return element?.closest?.(".month-span-bar[data-month-event-id]") || null;
+}
+
+function clearMonthDragPreview() {
+  refs.calendarGrid?.querySelectorAll(".calendar-day.is-month-preview").forEach((node) => node.classList.remove("is-month-preview"));
+  refs.calendarGrid?.querySelectorAll(".month-span-bar.is-month-drop-anchor").forEach((node) => node.classList.remove("is-month-drop-anchor"));
+  const layer = refs.calendarGrid?.querySelector(".month-drag-layer");
+  if (layer) {
+    layer.innerHTML = "";
+  }
+}
+
+function applyMonthDatePreview(startDateIso, endDateIso) {
+  clearMonthDragPreview();
+  if (!refs.calendarGrid || !startDateIso || !endDateIso) return;
+  const start = startDateIso <= endDateIso ? startDateIso : endDateIso;
+  const end = startDateIso <= endDateIso ? endDateIso : startDateIso;
+  refs.calendarGrid.querySelectorAll(".calendar-day[data-date]").forEach((node) => {
+    const dateIso = String(node.dataset.date || "");
+    if (dateIso >= start && dateIso <= end) {
+      node.classList.add("is-month-preview");
+    }
+  });
+}
+
+function setMonthDropAnchor(anchorId) {
+  refs.calendarGrid?.querySelectorAll(".month-span-bar.is-month-drop-anchor").forEach((node) => {
+    node.classList.toggle("is-month-drop-anchor", node.dataset.monthEventId === anchorId);
+  });
+}
+
+function ensureMonthDragLayer() {
+  if (!refs.calendarGrid) return null;
+  let layer = refs.calendarGrid.querySelector(".month-drag-layer");
+  if (layer) return layer;
+  layer = document.createElement("div");
+  layer.className = "month-drag-layer";
+  refs.calendarGrid.appendChild(layer);
+  return layer;
+}
+
+function getMonthPreviewLane(session) {
+  if (!session) return 0;
+  if (session.dropAnchorRecordId) {
+    const anchor = refs.calendarGrid?.querySelector(`.month-span-bar[data-month-event-id="${session.dropAnchorRecordId}"]`);
+    const lane = Number(anchor?.dataset.monthLane ?? NaN);
+    if (Number.isFinite(lane) && lane >= 0) return lane;
+  }
+  const sourceLane = Number(session.sourceNode?.dataset.monthLane ?? NaN);
+  return Number.isFinite(sourceLane) && sourceLane >= 0 ? sourceLane : 0;
+}
+
+function getMonthBarTopOffset() {
+  return document.documentElement.dataset.uiTheme === "soft-sculpt" ? 38 : 34;
+}
+
+function buildMonthDragPreviewMarkup(startDateIso, endDateIso, options = {}) {
+  if (!refs.calendarGrid || !startDateIso || !endDateIso) return "";
+  const start = startDateIso <= endDateIso ? startDateIso : endDateIso;
+  const end = startDateIso <= endDateIso ? endDateIso : startDateIso;
+  const gridRect = refs.calendarGrid.getBoundingClientRect();
+  const scrollTop = refs.calendarGrid.scrollTop;
+  const scrollLeft = refs.calendarGrid.scrollLeft;
+  const lane = Math.max(0, Number(options.lane || 0));
+  const barTop = getMonthBarTopOffset();
+  const title = String(options.title || "新建日程");
+  const accent = normalizeHexColor(options.accent || getDefaultTagColor("calendar"));
+  const textColor = options.textColor || "#134743";
+  const rows = Array.from(refs.calendarGrid.querySelectorAll(".month-week-row"));
+  return rows.map((row) => {
+    const cells = Array.from(row.querySelectorAll(".calendar-day[data-date]"));
+    const segmentCells = cells.filter((cell) => {
+      const dateIso = String(cell.dataset.date || "");
+      return dateIso >= start && dateIso <= end;
+    });
+    if (!segmentCells.length) return "";
+    const firstCell = segmentCells[0];
+    const lastCell = segmentCells[segmentCells.length - 1];
+    const firstRect = firstCell.getBoundingClientRect();
+    const lastRect = lastCell.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const segmentStartIso = String(firstCell.dataset.date || "");
+    const segmentEndIso = String(lastCell.dataset.date || "");
+    const previewKey = `${options.previewKey || "month-drag"}-${row.dataset.weekStart || segmentStartIso}`;
+    return `
+      <div
+        class="month-span-bar month-drag-preview-bar is-drag-preview${segmentStartIso > start ? " is-continued-left" : ""}${segmentEndIso < end ? " is-continued-right" : ""}"
+        data-preview-key="${escapeHtml(previewKey)}"
+        style="left:${firstRect.left - gridRect.left + scrollLeft}px;top:${rowRect.top - gridRect.top + scrollTop + barTop + lane * MONTH_BAR_ROW_HEIGHT}px;width:${Math.max(18, lastRect.right - firstRect.left)}px;--record-accent:${accent};--record-accent-text:${textColor};"
+      >
+        <span>${escapeHtml(title)}</span>
+      </div>
+    `;
+  }).filter(Boolean).join("");
+}
+
+function applyMonthBarPreview(startDateIso, endDateIso, options = {}) {
+  const layer = ensureMonthDragLayer();
+  if (!layer) return;
+  const markup = buildMonthDragPreviewMarkup(startDateIso, endDateIso, options);
+  applyPreviewLayerMarkup(layer, markup);
+}
+
+function buildMonthTimedDragPreviewMarkup(targetDateIso, options = {}) {
+  if (!refs.calendarGrid || !targetDateIso) return "";
+  const dayCell = refs.calendarGrid.querySelector(`.calendar-day[data-date="${targetDateIso}"]`);
+  const eventsHost = dayCell?.querySelector(".day-events");
+  const gridRect = refs.calendarGrid.getBoundingClientRect();
+  if (!dayCell || !eventsHost) return "";
+  const hostRect = eventsHost.getBoundingClientRect();
+  const title = String(options.title || "新建日程");
+  const accent = normalizeHexColor(options.accent || getDefaultTagColor("calendar"));
+  const textColor = options.textColor || "#134743";
+  return `
+    <div
+      class="event-chip month-inline-chip month-drag-preview-chip is-drag-preview"
+      data-preview-key="${escapeHtml(String(options.previewKey || "month-timed-preview"))}"
+      style="left:${hostRect.left - gridRect.left + refs.calendarGrid.scrollLeft}px;top:${hostRect.top - gridRect.top + refs.calendarGrid.scrollTop}px;width:${Math.max(36, hostRect.width)}px;--record-accent:${accent};--record-accent-text:${textColor};"
+    >
+      ${escapeHtml(title)}
+    </div>
+  `;
+}
+
+function applyMonthTimedPreview(targetDateIso, options = {}) {
+  const layer = ensureMonthDragLayer();
+  if (!layer) return;
+  applyPreviewLayerMarkup(layer, buildMonthTimedDragPreviewMarkup(targetDateIso, options));
+}
+
+function shiftEventDatesByDays(record, deltaDays) {
+  if (!record || record.recordType !== "calendar" || !Number.isFinite(deltaDays) || deltaDays === 0) return buildMutableEventPayload(record);
+  return mutateCalendarTemporal(record, {
+    date: addDaysToIsoDate(record.date, deltaDays),
+    endDate: addDaysToIsoDate(getEventEndDateIso(record), deltaDays),
+  });
+}
+
+function createDirectAllDaySpanEvent(startDateIso, endDateIso, sourceType = "month_drag_create") {
+  const normalizedStart = startDateIso <= endDateIso ? startDateIso : endDateIso;
+  const normalizedEnd = startDateIso <= endDateIso ? endDateIso : startDateIso;
+  preserveMonthScrollerExactPosition();
+  preserveMonthScrollerPosition();
+  createEventFromForm({
+    id: "",
+    title: "新建日程",
+    date: normalizedStart,
+    endDate: normalizedEnd,
+    allDay: true,
+    startTime: "",
+    endTime: "",
+    location: "",
+    tags: [],
+    tagColor: getDefaultTagColor("calendar"),
+    importance: "normal",
+    notes: "",
+    rawInput: "",
+    sourceType,
+  }, {
+    seedForm: false,
+  });
+  persistState();
+  render();
+  setStatus(`已创建全天事项：${normalizedStart}${normalizedStart === normalizedEnd ? "" : ` - ${normalizedEnd}`}`);
+}
+
+function finishMonthDragSession() {
+  if (!monthDragSession) return;
+  window.removeEventListener("mousemove", monthDragSession.handleMove);
+  window.removeEventListener("mouseup", monthDragSession.handleUp);
+  clearMonthDragPreview();
+  monthDragSession.sourceNode?.classList.remove("is-drag-source");
+  monthDragSession = null;
+}
+
+function beginMonthCreateDrag(event, dayNode) {
+  if (state.activeView !== "month") return;
+  if (event.button !== 0) return;
+  event.preventDefault();
+  if (!dayNode?.dataset.date) return;
+  if (event.target.closest(".calendar-day-header, [data-month-event-id], .month-inline-chip, .month-inline-overflow, #event-detail-popover")) return;
+  const startDateIso = dayNode.dataset.date;
+  const session = {
+    mode: "create_all_day",
+    sourceNode: dayNode,
+    startDateIso,
+    currentDateIso: startDateIso,
+    pointerStartX: event.clientX,
+    pointerStartY: event.clientY,
+    didMove: false,
+    handleMove: null,
+    handleUp: null,
+  };
+  session.handleMove = (moveEvent) => {
+    const deltaX = Math.abs(moveEvent.clientX - session.pointerStartX);
+    const deltaY = Math.abs(moveEvent.clientY - session.pointerStartY);
+    const cell = getMonthDayCellFromPoint(moveEvent.clientX, moveEvent.clientY);
+    if (!cell?.dataset.date) return;
+    session.currentDateIso = cell.dataset.date;
+    if (!session.didMove && deltaX < 4 && deltaY < 4) return;
+    session.didMove = true;
+    applyMonthDatePreview(session.startDateIso, session.currentDateIso);
+    applyMonthBarPreview(session.startDateIso, session.currentDateIso, {
+      previewKey: "month-create",
+      lane: 0,
+      title: "新建日程",
+    });
+  };
+  session.handleUp = () => {
+    const dragState = monthDragSession;
+    finishMonthDragSession();
+    if (!dragState?.didMove) return;
+    suppressSurfaceClick();
+    createDirectAllDaySpanEvent(dragState.startDateIso, dragState.currentDateIso, "month_drag_create");
+  };
+  monthDragSession = session;
+  window.addEventListener("mousemove", session.handleMove);
+  window.addEventListener("mouseup", session.handleUp, { once: true });
+}
+
+function beginMonthCardDrag(event, node) {
+  if (state.activeView !== "month") return;
+  if (event.button !== 0) return;
+  event.preventDefault();
+  if (event.target.closest("#event-detail-popover")) return;
+  const recordId = node.dataset.monthEventId;
+  const record = getRecordById(recordId);
+  if (!record || record.recordType !== "calendar") return;
+  const anchorDateIso = String(node.dataset.anchorDate || record.date || "");
+  if (!anchorDateIso) return;
+  const isAllDay = isAllDayLikeRecord(record);
+  const previewCardModel = isAllDay
+    ? buildCalendarCardViewModel(record, { cardKind: "month_span", dragKind: "move_all_day" })
+    : null;
+  const session = {
+    mode: isAllDay ? "move_all_day" : "move_timed_day",
+    record,
+    sourceNode: node,
+    anchorDateIso,
+    currentDateIso: anchorDateIso,
+    pointerStartX: event.clientX,
+    pointerStartY: event.clientY,
+    didMove: false,
+    dropAnchorRecordId: "",
+    dropAnchorMode: "after",
+    previewAccent: previewCardModel?.accent || getPrimaryRecordColor(record),
+    previewTextColor: previewCardModel?.accentTextColor || "#134743",
+    handleMove: null,
+    handleUp: null,
+  };
+  session.handleMove = (moveEvent) => {
+    const deltaX = Math.abs(moveEvent.clientX - session.pointerStartX);
+    const deltaY = Math.abs(moveEvent.clientY - session.pointerStartY);
+    const cell = getMonthDayCellFromPoint(moveEvent.clientX, moveEvent.clientY);
+    if (cell?.dataset.date) {
+      session.currentDateIso = cell.dataset.date;
+    }
+    const anchorBar = isAllDay ? getMonthBarFromPoint(moveEvent.clientX, moveEvent.clientY) : null;
+    if (anchorBar && anchorBar.dataset.monthEventId !== record.id) {
+      session.dropAnchorRecordId = anchorBar.dataset.monthEventId;
+      session.dropAnchorMode = moveEvent.clientY < (anchorBar.getBoundingClientRect().top + anchorBar.getBoundingClientRect().height / 2) ? "before" : "after";
+    } else {
+      session.dropAnchorRecordId = "";
+    }
+    if (!session.didMove && deltaX < 4 && deltaY < 4) return;
+    session.didMove = true;
+    session.sourceNode.classList.add("is-drag-source");
+    const deltaDays = dayDiff(parseDate(session.anchorDateIso), parseDate(session.currentDateIso));
+    const previewStart = addDaysToIsoDate(record.date, deltaDays);
+    const previewEnd = addDaysToIsoDate(getEventEndDateIso(record), deltaDays);
+    applyMonthDatePreview(previewStart, previewEnd);
+    setMonthDropAnchor(session.dropAnchorRecordId);
+    if (isAllDay) {
+      /* 全天事项拖拽和周视图时间块保持同一原则：
+         拖动过程中只更新轻量预览层，让浏览器在同一个 DOM 节点上补间位置，
+         不在 mousemove 里改真实数据，也不整页重绘。 */
+      applyMonthBarPreview(previewStart, previewEnd, {
+        previewKey: `month-record-${record.id}`,
+        lane: getMonthPreviewLane(session),
+        title: record.title || "新建日程",
+        accent: session.previewAccent,
+        textColor: session.previewTextColor,
+      });
+    } else {
+      applyMonthTimedPreview(previewStart, {
+        previewKey: `month-timed-${record.id}`,
+        title: record.title || "新建日程",
+        accent: getPrimaryRecordColor(record),
+        textColor: buildCalendarCardViewModel(record, { cardKind: "month_inline", dragKind: "move_timed" }).accentTextColor,
+      });
+    }
+  };
+  session.handleUp = () => {
+    const dragState = monthDragSession;
+    finishMonthDragSession();
+    if (!dragState?.didMove) return;
+    suppressSurfaceClick();
+    preserveMonthScrollerExactPosition();
+    preserveMonthScrollerPosition();
+    const deltaDays = dayDiff(parseDate(dragState.anchorDateIso), parseDate(dragState.currentDateIso));
+    let changed = false;
+    if (deltaDays !== 0) {
+      const payload = shiftEventDatesByDays(dragState.record, deltaDays);
+      if (payload) {
+        updateExistingEvent(payload);
+        changed = true;
+      }
+    }
+    if (dragState.mode === "move_all_day" && dragState.dropAnchorRecordId) {
+      if (dragState.dropAnchorMode === "before") {
+        moveRecordBeforeAnchor(dragState.record.id, dragState.dropAnchorRecordId);
+      } else {
+        moveRecordAfterAnchor(dragState.record.id, dragState.dropAnchorRecordId);
+      }
+      changed = true;
+    }
+    if (!changed) return;
+    persistState();
+    markSuppressDetailOpen(dragState.record.id);
+    render();
+    setStatus(dragState.mode === "move_all_day" ? "已更新全天事项位置。" : "已更新日程日期。");
+  };
+  monthDragSession = session;
+  window.addEventListener("mousemove", session.handleMove);
+  window.addEventListener("mouseup", session.handleUp, { once: true });
+}
+
+function finalizeDayAllDayToTimelineDrag(record, previewPayload) {
+  if (!record || !previewPayload) return;
+  updateExistingEvent(previewPayload);
+  persistState();
+  markSuppressDetailOpen(record.id);
+  renderDayView();
+  setStatus("已将全天事项转换为定时日程。");
+}
+
+function finalizeDayAllDayLaneDrag(session) {
+  commitAllDayReorderOrMove(session, {
+    render: renderDayView,
+    statusMessage: "已更新全天事项位置。",
+  });
+}
+
+function finalizeWeekAllDayToTimelineDrag(record, previewPayload) {
+  if (!record || !previewPayload) return;
+  preserveWeekPanePosition();
+  updateExistingEvent(previewPayload);
+  persistState();
+  markSuppressDetailOpen(record.id);
+  renderWeekView();
+  setStatus("已将全天事项转换为定时日程。");
+}
+
+function finalizeWeekAllDayLaneDrag(session) {
+  preserveWeekPanePosition();
+  commitAllDayReorderOrMove(session, {
+    render: renderWeekView,
+    statusMessage: "已更新全天事项位置。",
+  });
+}
+
 function syncMonthScrollerToFocusedMonth() {
   if (!refs.calendarGrid) return;
   const token = ++state.monthScroll.syncToken;
   requestAnimationFrame(() => {
     if (token !== state.monthScroll.syncToken) return;
+    if (Number.isFinite(state.monthScroll.restoreExactScrollTop)) {
+      refs.calendarGrid.scrollTop = Math.max(0, Number(state.monthScroll.restoreExactScrollTop) || 0);
+      state.monthScroll.restoreExactScrollTop = null;
+      state.monthScroll.restoreOffset = 0;
+      state.monthScroll.restoreWeekStart = "";
+      state.monthScroll.restoreWeekOffset = 0;
+      state.monthScroll.suppressNextScroll = true;
+      return;
+    }
     /* 恢复顺序：
        1. 先尝试按“当前视口顶部附近那一周”恢复，专门用于删除全天事项后的稳定回位
        2. 如果周锚点不存在，再退回原来的“按月份标题恢复” */
@@ -2428,13 +3748,11 @@ function updateWeekLabelFromLeftEdge(leftEdgeDate) {
 }
 
 function hasWeekPreviewInteraction() {
-  /* 周视图里有两种临时预览态：
-     - 空白区拖拽创建新定时事项
-     - 拖拽已有定时卡片改时间
-     这两种状态下都不应该触发“滚动结束后自动吸附”，
+  /* 周视图里只要当前共享拖拽会话的 scope 是 week，
+     或者上一轮拖拽预览还处在“像素级锁视口恢复”阶段，
+     就应该暂停横向整天吸附。
      否则用户还在拖，底层轨道却自己往最近整天回弹，会直接破坏拖拽手感。 */
-  return state.dayDrag?.scope === "week"
-    || state.timedCardDrag?.scope === "week"
+  return timelineDragSession?.scope === "week"
     || state.weekPaneScroll.previewLockActive;
 }
 
@@ -2805,11 +4123,7 @@ function renderWeekView() {
   const dayCount = state.weekPaneScroll.dayCount;
   const weekDays = Array.from({ length: dayCount }, (_, index) => addDays(state.weekPaneScroll.rangeAnchor, index));
   const timedSegments = weekDays.flatMap((day) => getTimedEventSegmentsForDate(isoDate(day)));
-  const hasWeekSelectionPreview = state.dayDrag && state.dayDrag.scope === "week";
-  const hasWeekTimedCardPreview = state.timedCardDrag?.scope === "week" && state.timedCardDrag.previewPayload;
-  const selectionMarkup = hasWeekSelectionPreview
-    ? renderWeekSelectionPreview(weekDays, state.dayDrag)
-    : "";
+  const isWeekDragging = Boolean(timelineDragSession?.scope === "week");
   const dayWidthPx = getWeekDayWidthPx();
   const trackStyle = `--week-day-count:${dayCount};--week-day-width:${dayWidthPx.toFixed(3)}px;grid-template-columns:repeat(${dayCount}, minmax(0, var(--week-day-width)));width:calc(${dayCount} * var(--week-day-width));`;
 
@@ -2824,7 +4138,7 @@ function renderWeekView() {
           ${weekDays.map((day) => `
             <div class="week-header-cell" data-week-header-date="${isoDate(day)}">
               <span class="week-header-main">${escapeHtml(WEEKDAY_LABELS[(day.getDay() + 6) % 7])}</span>
-              <span class="week-header-date">${day.getMonth() + 1}/${day.getDate()}</span>
+              <span class="week-header-date${isoDate(day) === isoDate(new Date()) ? " is-today-badge" : ""}">${day.getMonth() + 1}/${day.getDate()}</span>
             </div>
           `).join("")}
         </div>
@@ -2835,11 +4149,11 @@ function renderWeekView() {
         <div class="week-time-labels">${renderWeekTimeLabels()}</div>
       </div>
       <div id="week-scroll-body" class="week-scroll-body">
-        <div id="week-grid-surface" class="week-grid-surface ${hasWeekSelectionPreview || hasWeekTimedCardPreview ? "is-dragging" : ""}" style="${trackStyle}">
+        <div id="week-grid-surface" class="week-grid-surface ${isWeekDragging ? "is-dragging" : ""}" style="${trackStyle}">
           ${weekDays.map((_, index) => `<div class="week-column-guide" style="left:calc(${index} * var(--week-day-width));width:var(--week-day-width);"></div>`).join("")}
           ${renderWeekEventBlocks(weekDays)}
-          ${selectionMarkup}
-          ${!timedSegments.length && !selectionMarkup ? `<div class="week-empty-hint">在任意日期列内拖拽即可创建一段日程。</div>` : ""}
+          <div class="timeline-drag-layer"></div>
+          ${!timedSegments.length ? `<div class="week-empty-hint">在任意日期列内拖拽即可创建一段日程。</div>` : ""}
         </div>
       </div>
     </div>
@@ -2878,6 +4192,40 @@ function renderWeekView() {
   refs.weekGrid.querySelectorAll("[data-week-event-id]:not([data-week-quick-entry])").forEach((node) => {
     if (node.matches(".week-event-block")) {
       node.addEventListener("mousedown", (event) => beginWeekTimedCardDrag(event, node, weekDays));
+    } else if (node.matches(".week-all-day-item")) {
+      node.addEventListener("mousedown", (event) => {
+        const record = getRecordById(node.dataset.weekEventId);
+        if (!record || record.recordType !== "calendar" || !isAllDayLikeRecord(record)) return;
+        beginAllDayCardDrag(event, node, record, {
+          scope: "week",
+          weekDays,
+          trackStyle,
+          getSourceDate: () => String(node.dataset.anchorDate || record.date || ""),
+          getTimelineHit: (moveEvent) => getBoundedTimelineHit(moveEvent, buildWeekTimelineGeometry(weekDays)),
+          getAllDayDate: (moveEvent) => getWeekAllDayDateFromPoint(moveEvent.clientX, weekDays),
+          getDropAnchor: (moveEvent, session) => {
+            const anchorNode = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY)?.closest?.(".week-all-day-item[data-week-event-id]");
+            if (!anchorNode || anchorNode.dataset.weekEventId === record.id) {
+              return {
+                node: null,
+                recordId: "",
+                mode: "after",
+                lane: getWeekAllDayPreviewLane(session),
+              };
+            }
+            const rect = anchorNode.getBoundingClientRect();
+            return {
+              node: anchorNode,
+              recordId: anchorNode.dataset.weekEventId,
+              mode: moveEvent.clientY < rect.top + rect.height / 2 ? "before" : "after",
+              lane: getWeekAllDayPreviewLane({ ...session, dropAnchorRecordId: anchorNode.dataset.weekEventId }),
+            };
+          },
+          renderAllDayPreview: renderWeekAllDayDragPreview,
+          commitTimeline: finalizeWeekAllDayToTimelineDrag,
+          commitAllDay: finalizeWeekAllDayLaneDrag,
+        });
+      });
     }
     node.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -2893,82 +4241,31 @@ function renderWeekView() {
       const recordId = button.dataset.weekAllDayEventId;
       const record = getRecordById(recordId);
       if (!record || !isMonthQuickEditableRecord(record)) return;
+      /* 周视图顶部全天栏的双击也应该只是原地进入快速编辑。
+         这里如果继续走 navigateToRecordInWorkspace(...)，会把“当前视图内编辑”
+         和“跨视图导航定位”混在一起，留下和月视图同类的跳动风险。 */
       state.selectedDate = record.date || state.selectedDate;
-      navigateToRecordInWorkspace(recordId, {
-        preferredView: "week",
-        forceRender: false,
-        forceScroll: false,
-        behavior: "auto",
-      });
       activateWeekQuickEntry(record, { draftTitle: record.title || "", render: true });
     });
   });
 
-  refs.weekGrid.querySelectorAll("[data-week-quick-input]").forEach((input) => {
-    const recordId = input.dataset.weekQuickInput;
-    input.addEventListener("input", () => {
+  bindScopedQuickEntryInputs({
+    root: refs.weekGrid,
+    inputSelector: "[data-week-quick-input]",
+    recordIdAttribute: "data-week-quick-input",
+    getState: () => state.weekQuickEntry,
+    setDraft: (recordId, draftTitle) => {
       state.weekQuickEntry = {
         ...state.weekQuickEntry,
         recordId,
-        draftTitle: input.value,
+        draftTitle,
       };
-      if (state.eventDetailPopover?.recordId === recordId) {
-        closeEventDetailPopover({ statusMessage: "" });
-      }
-    });
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && !event.shiftKey) {
-        event.preventDefault();
-        handleWeekQuickEntrySubmit(recordId, input.value);
-        return;
-      }
-      if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-        const moved = moveWeekQuickEntryFocus(recordId, event.key === "ArrowUp" ? -1 : 1, input.value);
-        if (moved) {
-          event.preventDefault();
-        }
-        return;
-      }
-      if ((event.key === "Backspace" || event.key === "Delete") && !input.value.trim()) {
-        event.preventDefault();
-        const deleted = deleteEventRecordById(recordId, {
-          closePopover: true,
-          statusMessage: "已删除空白全天事项。",
-        });
-        if (deleted) {
-          clearWeekQuickEntry();
-        }
-        return;
-      }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        finishWeekQuickEntry();
-      }
-    });
-    input.addEventListener("blur", () => {
-      window.setTimeout(() => {
-        const activeElement = document.activeElement;
-        if (activeElement?.matches?.("[data-week-quick-input]")) return;
-        if (allDayQuickEntryPointerTarget) return;
-        if (state.weekQuickEntry.recordId === recordId) {
-          finishWeekQuickEntry({ title: input.value });
-        }
-      }, 0);
-    });
+    },
+    submit: handleWeekQuickEntrySubmit,
+    moveFocus: moveWeekQuickEntryFocus,
+    finish: finishWeekQuickEntry,
+    clear: clearWeekQuickEntry,
   });
-
-  const weekQuickFocusToken = state.weekQuickEntry.focusToken;
-  if (weekQuickFocusToken && state.weekQuickEntry.recordId) {
-    requestAnimationFrame(() => {
-      if (weekQuickFocusToken !== state.weekQuickEntry.focusToken) return;
-      const input = refs.weekGrid?.querySelector(`[data-week-quick-input="${state.weekQuickEntry.recordId}"]`);
-      if (!input) return;
-      input.focus();
-      if (input.value) {
-        input.setSelectionRange(input.value.length, input.value.length);
-      }
-    });
-  }
 
   const weekSurface = refs.weekGrid.querySelector("#week-grid-surface");
   const bodyPane = refs.weekGrid.querySelector("#week-scroll-body");
@@ -3003,11 +4300,12 @@ function renderWeekView() {
   bindWeekAllDayResizeHandle();
   updateWeekAllDayOverflowState();
   /* 周视图里有两类“拖拽预览”：
-     1. 空白区拖拽创建新事项，状态存在 state.dayDrag
-     2. 拖拽已有定时卡片改时间，状态存在 state.timedCardDrag
-     这两种预览都只是“当前视口上的临时覆盖层”，不应该参与标准的整天吸附恢复。
-     如果这里漏掉 timedCardDrag，就会重新落回 syncWeekPaneScrollerToLeftEdge()，
-     于是页面按日期列重新对齐，看起来像“开始拖拽时固定往左滑两格”。 */
+     1. 空白区拖拽创建新事项
+     2. 拖拽已有定时卡片改时间
+     它们现在都走共享的 timelineDragSession，只是当前视口上的临时覆盖层，
+     不应该参与标准的整天吸附恢复。
+     如果这里漏掉这层判断，就会重新落回 syncWeekPaneScrollerToLeftEdge()，
+     页面会按日期列重新对齐，看起来像“开始拖拽时固定往左滑两格”。 */
   if (hasWeekPreviewInteraction() && state.weekPaneScroll.previewLockActive) {
     restoreWeekPreviewViewport();
   } else {
@@ -3039,15 +4337,12 @@ function buildWeekAllDayBars(weekDays) {
   const weekEndIso = isoDate(weekDays[weekDays.length - 1]);
   /* 周视图顶部全天栏现在与月视图采用同一套“跨列条带”布局：
      - 单天事项显示为单列条带，可进入快速改标题
-     - 跨天事项直接跨多列显示，保证在周视图横向虚拟轨道上连续不断裂 */
-  const allDayRecords = getActiveRecordsByType("calendar")
-    .filter((record) => record.date && isAllDayLikeRecord(record) && getEventEndDateIso(record) >= weekStartIso && record.date <= weekEndIso)
-    .sort((left, right) => {
-      const leftSpan = dayDiff(parseDate(left.date), parseDate(getEventEndDateIso(left))) + 1;
-      const rightSpan = dayDiff(parseDate(right.date), parseDate(getEventEndDateIso(right))) + 1;
-      if (leftSpan !== rightSpan) return rightSpan - leftSpan;
-      return left.date.localeCompare(right.date);
-    });
+     - 跨天事项直接跨多列显示，保证在周视图横向虚拟轨道上连续不断裂
+     这里和月视图共用同一套“最小 lane 数”排序，确保两个视图切换时顺序一致。 */
+  const allDayRecords = sortAllDayRecordsForCompactLanes(
+    getActiveRecordsByType("calendar")
+      .filter((record) => record.date && isAllDayLikeRecord(record) && getEventEndDateIso(record) >= weekStartIso && record.date <= weekEndIso)
+  );
 
   const lanes = [];
   const bars = allDayRecords.map((record) => {
@@ -3062,7 +4357,7 @@ function buildWeekAllDayBars(weekDays) {
     if (endIndex < 0 || startIndex > weekDays.length - 1) return "";
 
     let lane = 0;
-    while (lanes[lane] && lanes[lane] >= startIndex) lane += 1;
+    while (lanes[lane] != null && lanes[lane] >= startIndex) lane += 1;
     lanes[lane] = endIndex;
 
     const gridStyle = `grid-column:${startIndex + 1} / ${endIndex + 2};grid-row:${lane + 1};${viewModel.accentStyle}`;
@@ -3124,27 +4419,9 @@ function renderWeekTimeLabels() {
 
 function renderWeekEventBlocks(weekDays) {
   const dayCount = weekDays.length;
-  const previewPayload = state.timedCardDrag?.scope === "week" ? state.timedCardDrag.previewPayload : null;
-  const previewRecord = previewPayload ? {
-    recordType: "calendar",
-    id: previewPayload.id || state.timedCardDrag.recordId || "drag_preview",
-    title: previewPayload.title || "",
-    date: previewPayload.date,
-    endDate: previewPayload.endDate,
-    startTime: previewPayload.startTime,
-    endTime: previewPayload.endTime,
-    allDay: false,
-    location: previewPayload.location || "",
-    notes: previewPayload.notes || "",
-    tags: previewPayload.tags || [],
-    tagColor: previewPayload.tagColor || "",
-    startAt: previewPayload.startAt || "",
-    endAt: previewPayload.endAt || "",
-  } : null;
   const markup = weekDays.map((day, index) => {
     const dayIso = isoDate(day);
-    const timedSegments = getTimedEventSegmentsForDate(dayIso)
-      .filter((segment) => segment.record.id !== state.timedCardDrag?.recordId);
+    const timedSegments = getTimedEventSegmentsForDate(dayIso);
     // 周视图里的“事项卡片”不是直接一条条渲染的，
     // 而是先把同一天的定时事项做一次布局计算：
     // 1. 识别哪些事项彼此重叠
@@ -3152,14 +4429,7 @@ function renderWeekEventBlocks(weekDays) {
     // 3. 把这组重叠事项的总列数 columns 一起传给渲染函数
     // 后面的 renderWeekEventBlock 会基于 column / columns 决定轻微缩进、透明度和层级。
     const layouts = buildWeekEventLayouts(timedSegments);
-    let html = layouts.map(({ segment, column, columns }) => renderWeekEventBlock(segment, index, dayCount, { column, columns })).join("");
-    if (previewRecord) {
-      const previewSegment = buildTimedEventSegmentForDate(previewRecord, dayIso);
-      if (previewSegment) {
-        html += renderWeekEventBlock(previewSegment, index, dayCount, { column: 0, columns: 1 }, { preview: true });
-      }
-    }
-    return html;
+    return layouts.map(({ segment, column, columns }) => renderWeekEventBlock(segment, index, dayCount, { column, columns })).join("");
   }).join("");
   return markup;
 }
@@ -3279,8 +4549,9 @@ function renderWeekEventBlock(segment, dayIndex, dayCount, layout = { column: 0,
   const column = Math.max(0, Math.min(columns - 1, Number(layout.column) || 0));
   const compact = height < 52;
   const tight = height < 42;
-  const isDragSource = state.timedCardDrag?.recordId === event.id && !options.preview;
+  const isDragSource = timelineDragSession?.mode === "move" && timelineDragSession?.record?.id === event.id && !options.preview;
   const isPreview = Boolean(options.preview);
+  const previewKeyAttr = options.previewKey ? ` data-preview-key="${escapeHtml(String(options.previewKey))}"` : "";
   const overlapIndent = Math.min(8, 4 + (columns - 1) * 2);
   const leftInset = 6 + column * overlapIndent;
   const rightInset = 8 + Math.max(0, columns - 1) * overlapIndent;
@@ -3288,7 +4559,7 @@ function renderWeekEventBlock(segment, dayIndex, dayCount, layout = { column: 0,
     ? 0.96
     : (columns > 1 ? Math.max(0.72, 0.92 - column * 0.08) : 0.94);
   return `
-    <article class="week-event-block${compact ? " is-compact" : ""}${tight ? " is-tight" : ""}${state.editingEventId === event.id ? " is-selected" : ""}${isDragSource ? " is-drag-source" : ""}${isPreview ? " is-drag-preview" : ""}" data-week-event-id="${event.id}" data-segment-date="${segment.dateIso}" data-event-detail-trigger="week-timeline" ${buildCalendarCardDataAttributes(viewModel)} style="left:calc(${dayIndex * widthPercent}% + ${leftInset}px);width:calc(${widthPercent}% - ${leftInset + rightInset}px);top:${top}px;height:${height}px;z-index:${isPreview ? 48 : (20 + column)};opacity:${overlapAlpha};${viewModel.accentStyle}">
+    <article class="week-event-block${compact ? " is-compact" : ""}${tight ? " is-tight" : ""}${state.editingEventId === event.id ? " is-selected" : ""}${isDragSource ? " is-drag-source" : ""}${isPreview ? " is-drag-preview" : ""}" data-week-event-id="${event.id}" data-segment-date="${segment.dateIso}" data-event-detail-trigger="week-timeline"${previewKeyAttr} ${buildCalendarCardDataAttributes(viewModel)} style="left:calc(${dayIndex * widthPercent}% + ${leftInset}px);width:calc(${widthPercent}% - ${leftInset + rightInset}px);top:${top}px;height:${height}px;z-index:${isPreview ? 48 : (20 + column)};opacity:${overlapAlpha};${viewModel.accentStyle}">
       <h3>${escapeHtml(viewModel.title)}</h3>
       <p class="week-event-time">${escapeHtml(viewModel.displayTimeText)}</p>
       ${viewModel.location ? `<p class="week-event-location">${escapeHtml(viewModel.location)}</p>` : ""}
@@ -3355,7 +4626,7 @@ function renderWeekSelectionPreview(weekDays, drag) {
         endTime: formatMinutes(normalized.endMinutes),
       });
     previews.push(`
-      <article class="week-selection-preview" style="left:calc(${index * widthPercent}% + 10px);width:calc(${widthPercent}% - 20px);top:${top}px;height:${height}px;">
+      <article class="week-selection-preview" data-preview-key="week-create-preview-${dayIso}" style="left:calc(${index * widthPercent}% + 10px);width:calc(${widthPercent}% - 20px);top:${top}px;height:${height}px;">
         <h3>${escapeHtml(dayIso)}</h3>
         <p>${escapeHtml(label)}</p>
       </article>
@@ -4303,6 +5574,13 @@ function deleteEventRecordById(eventId, options = {}) {
      这样可以把快照、搜索索引、月视图滚动恢复、状态清理都集中在一个地方。 */
   const event = getRecordById(eventId);
   if (!event || event.recordType !== "calendar") return false;
+  /* 月视图里无论删的是全天事项还是定时事项，本质上都会导致当前周行高度或单元格内容高度变化。
+     如果这里只对 quick-entry 那条全天事项单独保滚动锚点，普通定时事项删除后 render()
+     仍可能把月视图滚回错误位置，表现成“删除后画面乱跳”。
+     所以这里统一提升为：只要当前正在月视图里删除 calendar 事项，就先保存当前月视口锚点。 */
+  if (state.activeView === "month") {
+    preserveMonthScrollerPosition();
+  }
   /* 周视图里删除普通事项也会触发一次完整 render。
      如果不先记录当前横向/纵向位置，后续 syncWeekPaneScrollerToLeftEdge
      可能会按陈旧的左边界日期重新定位，表现成“删完卡片页面突然跳走”。 */
@@ -4310,18 +5588,23 @@ function deleteEventRecordById(eventId, options = {}) {
     preserveWeekPanePosition();
   }
   if (state.monthQuickEntry.recordId === eventId) {
-    preserveMonthScrollerPosition();
     clearMonthQuickEntry();
   }
   if (state.weekQuickEntry.recordId === eventId) {
     preserveWeekPanePosition();
     clearWeekQuickEntry();
   }
+  if (state.dayQuickEntry.recordId === eventId) {
+    clearDayQuickEntry();
+  }
+  const nextMonthFocusEventId = state.activeView === "month" && state.editingEventId === eventId
+    ? getMonthAdjacentEventId(eventId)
+    : "";
   saveSnapshot(event, "before_delete");
   state.db.records = state.db.records.filter((item) => item.id !== eventId);
   removeSearchDocsForRecord(eventId);
   logChange(eventId, "record", JSON.stringify(event), "[deleted]", "manual_ui");
-  state.editingEventId = null;
+  clearActiveCalendarSelection();
   if (options.resetEventForm) {
     seedEmptyInputForm();
   }
@@ -4330,9 +5613,17 @@ function deleteEventRecordById(eventId, options = {}) {
     refs.eventEditorModal.close();
   }
   if (options.closePopover && state.eventDetailPopover?.recordId === eventId) {
-    closeEventDetailPopover({ statusMessage: "" });
+    closeEventDetailPopover({ autoSave: false, statusMessage: "" });
   }
   render();
+  if (nextMonthFocusEventId && state.activeView === "month") {
+    const anchor = findEventDetailAnchorElement(nextMonthFocusEventId, { view: "month" });
+    if (anchor) {
+      openEventDetailPopover(nextMonthFocusEventId, anchor);
+    } else {
+      setActiveCalendarSelection(nextMonthFocusEventId);
+    }
+  }
   setStatus(options.statusMessage || "事项已删除。");
   return true;
 }
@@ -4497,7 +5788,7 @@ function handleConfirmImport() {
         refs.dataModal.close();
       } else {
         state.db = databaseStore.normalizeImportedState(JSON.parse(content));
-        state.editingEventId = null;
+        clearActiveCalendarSelection();
         state.editingTodoId = null;
         persistState();
         seedEmptyInputForm();
@@ -4549,8 +5840,7 @@ function openEventDetailPopover(eventId, anchorElement) {
     return;
   }
 
-  state.editingEventId = record.id;
-  state.editingTodoId = null;
+  setActiveCalendarSelection(record.id);
   if (state.activeView === "day") {
     renderSelectedDaySummary();
     renderDailyEvents();
@@ -4677,6 +5967,13 @@ function persistEventDetailDraft(eventId, options = {}) {
   if (state.activeView === "week" && !options.reveal) {
     preserveWeekPanePosition();
   }
+  /* 月视图详情卡片自动保存时，也必须先记住当前滚动锚点。
+     否则像“双击空白创建 / 删除当前事项 / 切换到另一条事项”这类操作，
+     会先被详情卡片关闭触发一次自动保存 render，再在第二步真正执行创建/删除，
+     表现成页面有概率先跳一下再继续。 */
+  if (state.activeView === "month" && !options.reveal) {
+    preserveMonthScrollerPosition();
+  }
   updateExistingEvent(payload);
   persistState();
   if (options.reveal) {
@@ -4693,6 +5990,10 @@ function persistEventDetailDraft(eventId, options = {}) {
 function closeEventDetailPopover(options = {}) {
   if (!refs.eventDetailPopover || refs.eventDetailPopover.classList.contains("is-hidden")) return;
   const eventId = state.eventDetailPopover?.recordId || "";
+  /* 高亮的生命周期应当和“详情是否仍处于激活态”保持一致。
+     所以一旦开始关闭详情，就立刻清掉当前选中高亮，
+     不再等关闭动画 320ms 结束后才移除。 */
+  clearActiveCalendarSelection();
   const shouldAutoSave = options.autoSave !== false;
   if (shouldAutoSave && eventId) {
     const didSave = persistEventDetailDraft(eventId, {
@@ -4714,6 +6015,7 @@ function closeEventDetailPopover(options = {}) {
   refs.eventDetailPopover.setAttribute("aria-hidden", "true");
   window.setTimeout(() => {
     if (!refs.eventDetailPopover || refs.eventDetailPopover.classList.contains("is-visible")) return;
+    const closingSameRecord = state.eventDetailPopover?.recordId === eventId;
     refs.eventDetailPopover.classList.add("is-hidden");
     refs.eventDetailPopover.classList.remove("is-closing");
     refs.eventDetailPopover.style.removeProperty("--popover-left");
@@ -4724,8 +6026,10 @@ function closeEventDetailPopover(options = {}) {
     refs.eventDetailPopover.style.removeProperty("--popover-origin-x");
     refs.eventDetailPopover.style.removeProperty("--popover-origin-y");
     refs.eventDetailPopover.dataset.side = "";
-    state.eventDetailPopover = null;
-    resetEventDetailTransientState();
+    if (closingSameRecord) {
+      state.eventDetailPopover = null;
+      resetEventDetailTransientState();
+    }
   }, 320);
 }
 
@@ -5559,7 +6863,7 @@ function findEventDetailAnchorElement(eventId, options = {}) {
   if (!root) return null;
   if (options.view === "day") {
     return root.querySelector(
-      `.day-all-day-chip[data-day-event-id="${eventId}"], .day-event-block[data-day-event-id="${eventId}"]`
+      `.day-all-day-chip[data-day-event-id="${eventId}"], [data-day-quick-entry="${eventId}"], .day-event-block[data-day-event-id="${eventId}"]`
     );
   }
   if (options.view === "week") {
@@ -5574,35 +6878,8 @@ function findEventDetailAnchorElement(eventId, options = {}) {
     ) || (record?.date ? root.querySelector(`.calendar-day[data-date="${record.date}"]`) : null);
   }
   return root.querySelector(
-    `.day-all-day-chip[data-day-event-id="${eventId}"], .day-event-block[data-day-event-id="${eventId}"], .week-all-day-item[data-week-event-id="${eventId}"], .week-event-block[data-week-event-id="${eventId}"], .month-inline-chip[data-month-event-id="${eventId}"], .month-span-bar[data-month-event-id="${eventId}"], [data-month-quick-entry="${eventId}"]`
+    `.day-all-day-chip[data-day-event-id="${eventId}"], [data-day-quick-entry="${eventId}"], .day-event-block[data-day-event-id="${eventId}"], .week-all-day-item[data-week-event-id="${eventId}"], .week-event-block[data-week-event-id="${eventId}"], .month-inline-chip[data-month-event-id="${eventId}"], .month-span-bar[data-month-event-id="${eventId}"], [data-month-quick-entry="${eventId}"]`
   );
-}
-
-function createDirectAllDayEvent({ dateIso, sourceType }) {
-  createEventFromForm({
-    id: "",
-    title: "新建日程",
-    date: dateIso,
-    allDay: true,
-    startTime: "",
-    endTime: "",
-    location: "",
-    tags: [],
-    tagColor: getDefaultTagColor("calendar"),
-    importance: "normal",
-    notes: "",
-    rawInput: "",
-    sourceType,
-  }, {
-    seedForm: false,
-  });
-  persistState();
-  state.selectedDate = dateIso;
-  state.visibleMonth = startOfMonth(parseDate(dateIso));
-  state.visibleWeek = startOfWeek(parseDate(dateIso));
-  render();
-  revealCreatedEvent(state.editingEventId);
-  setStatus(`已创建全天事项：${dateIso}`);
 }
 
 /* 时间轴上的“直接创建定时日程”统一走这里：
@@ -5668,13 +6945,17 @@ function handleDayTimelineDoubleClick(event) {
   });
 }
 
+/* ---------- Timeline Interaction Entrypoints ---------- */
+
 function handleDayAllDayDoubleClick(event) {
   if (event.button !== 0) return;
   if (event.target.closest("[data-day-event-id], #event-detail-popover")) return;
-  createDirectAllDayEvent({
-    dateIso: state.selectedDate,
-    sourceType: "day_all_day_direct",
+  finishDayQuickEntry({ render: false });
+  const created = createSingleDayAllDayQuickEntry(state.selectedDate, {
+    initialTitle: "新建日程",
+    sourceType: "day_quick_entry",
   });
+  activateDayQuickEntry(created, { draftTitle: "", render: true });
 }
 
 function handleWeekTimelineDoubleClick(event, weekDays) {
@@ -5741,143 +7022,68 @@ function cancelPendingWeekSingleClick(kind, targetId) {
 }
 
 function beginDayDrag(event) {
-  if (event.button !== 0) return;
-  if (event.target.closest("[data-day-event-id], .day-all-day-chip, #event-detail-popover")) return;
-  const startMinutes = eventToTimelineMinutes(event);
-  const dragSeed = {
+  beginTimelineCreateDrag(event, {
     scope: "day",
-    dateIso: state.selectedDate,
-    startMinutes,
-    endMinutes: startMinutes + DAY_SLOT_MINUTES,
-    pointerStartX: event.clientX,
-    pointerStartY: event.clientY,
-    didMove: false,
-  };
-
-  const handleMove = (moveEvent) => {
-    if (!state.dayDrag && dragSeed) {
-      const deltaX = Math.abs(moveEvent.clientX - dragSeed.pointerStartX);
-      const deltaY = Math.abs(moveEvent.clientY - dragSeed.pointerStartY);
-      if (deltaX >= 4 || deltaY >= 4) {
-        dragSeed.didMove = true;
-        state.dayDrag = { ...dragSeed };
-        renderDayView();
-      }
-    }
-    if (!state.dayDrag) return;
-    if (!state.dayDrag.didMove) {
-      state.dayDrag.didMove = true;
-    }
-    state.dayDrag.endMinutes = eventToTimelineMinutes(moveEvent);
-    renderDayView();
-  };
-
-  const handleUp = () => {
-    document.removeEventListener("mousemove", handleMove);
-    document.removeEventListener("mouseup", handleUp);
-    finalizeDayDrag();
-  };
-
-  document.addEventListener("mousemove", handleMove);
-  document.addEventListener("mouseup", handleUp);
+    blockSelector: "[data-day-event-id], .day-all-day-chip",
+    getGeometry: buildDayTimelineGeometry,
+    buildInitialState: (startHit, startEvent) => ({
+      scope: "day",
+      dateIso: startHit.dateIso,
+      startMinutes: startHit.minutes,
+      endMinutes: startHit.minutes + DAY_SLOT_MINUTES,
+      pointerStartX: startEvent.clientX,
+      pointerStartY: startEvent.clientY,
+      didMove: false,
+    }),
+    commit: finalizeDayDrag,
+  });
 }
 
-function finalizeDayDrag() {
-  if (!state.dayDrag) return;
-  if (!state.dayDrag.didMove) {
-    state.dayDrag = null;
-    renderDayView();
-    return;
-  }
-  const start = Math.min(state.dayDrag.startMinutes, state.dayDrag.endMinutes);
-  const end = Math.max(state.dayDrag.startMinutes, state.dayDrag.endMinutes);
+function finalizeDayDrag(dragState) {
+  if (!dragState) return;
+  const start = Math.min(dragState.startMinutes, dragState.endMinutes);
+  const end = Math.max(dragState.startMinutes, dragState.endMinutes);
   const safeEnd = end === start ? start + DAY_SLOT_MINUTES : end;
-  const dateIso = state.dayDrag.dateIso;
-  state.dayDrag = null;
   createDirectTimedEvent({
-    dateIso,
+    dateIso: dragState.dateIso,
     startMinutes: start,
     endMinutes: safeEnd,
     sourceType: "day_timeline_direct",
   });
 }
 
-/* 周视图空白区拖拽创建：
-   这里只记录两个端点，不直接写库。
-   - startDateIso/startMinutes：鼠标按下位置
-   - endDateIso/endMinutes：鼠标当前经过位置
-   后续预览和最终创建都复用这份临时状态，因此跨天天然可表达。 */
+/* 周视图空白区拖拽创建只是共享拖拽引擎的一个 week 适配层：
+   - startDateIso / endDateIso 让跨天创建天然可表达
+   - 真正的命中换算、预览更新、rAF 合帧都在共享层里 */
 function beginWeekDrag(event, weekDays) {
-  if (event.button !== 0) return;
-  if (event.target.closest("[data-week-event-id], .week-all-day-item, #event-detail-popover")) return;
-  const hit = eventToWeekTimelinePosition(event, weekDays);
-  if (!hit) return;
-  const dragSeed = {
+  beginTimelineCreateDrag(event, {
     scope: "week",
-    startDateIso: hit.dateIso,
-    endDateIso: hit.dateIso,
-    startMinutes: hit.minutes,
-    endMinutes: hit.minutes + DAY_SLOT_MINUTES,
-    pointerStartX: event.clientX,
-    pointerStartY: event.clientY,
-    didMove: false,
-  };
-
-  const handleMove = (moveEvent) => {
-    /* 周视图空白拖拽创建的职责刻意保持很单纯：
-       - 只做“起点 + 当前鼠标位置”两端记录
-       - 每次鼠标移动只刷新 preview 态
-       - 真正写库延迟到 mouseup
-       这样才能把“拖拽创建”与“已有卡片拖拽修改”彻底分离，减少互相打架。 */
-    const nextHit = eventToWeekTimelinePosition(moveEvent, weekDays);
-    if (!nextHit) return;
-    if (!state.dayDrag && dragSeed) {
-      const deltaX = Math.abs(moveEvent.clientX - dragSeed.pointerStartX);
-      const deltaY = Math.abs(moveEvent.clientY - dragSeed.pointerStartY);
-      if (deltaX >= 4 || deltaY >= 4) {
-        dragSeed.didMove = true;
-        captureWeekPreviewViewport();
-        state.dayDrag = { ...dragSeed };
-        renderWeekView();
-      }
-    }
-    if (!state.dayDrag) return;
-    if (!state.dayDrag.didMove) {
-      state.dayDrag.didMove = true;
-    }
-    state.dayDrag.endDateIso = nextHit.dateIso;
-    state.dayDrag.endMinutes = nextHit.minutes;
-    captureWeekPreviewViewport();
-    renderWeekView();
-  };
-
-  const handleUp = () => {
-    document.removeEventListener("mousemove", handleMove);
-    document.removeEventListener("mouseup", handleUp);
-    finalizeWeekDrag();
-  };
-
-  document.addEventListener("mousemove", handleMove);
-  document.addEventListener("mouseup", handleUp);
+    blockSelector: "[data-week-event-id], .week-all-day-item",
+    getGeometry: () => buildWeekTimelineGeometry(weekDays),
+    buildInitialState: (startHit, startEvent) => ({
+      scope: "week",
+      startDateIso: startHit.dateIso,
+      endDateIso: startHit.dateIso,
+      startMinutes: startHit.minutes,
+      endMinutes: startHit.minutes + DAY_SLOT_MINUTES,
+      pointerStartX: startEvent.clientX,
+      pointerStartY: startEvent.clientY,
+      didMove: false,
+    }),
+    commit: finalizeWeekDrag,
+  });
 }
 
 /* 松手时把拖拽态归一化为真实起止，再一次性落库。
    这样拖拽中的预览只是 UI 临时态，不会反复修改 record。 */
-function finalizeWeekDrag() {
-  if (!state.dayDrag) return;
-  if (!state.dayDrag.didMove) {
-    state.dayDrag = null;
+function finalizeWeekDrag(dragState) {
+  if (!dragState) {
     clearWeekPreviewViewportLock();
-    renderWeekView();
     return;
   }
-  const normalized = normalizeWeekDragRange(state.dayDrag);
-  state.dayDrag = null;
+  const normalized = normalizeWeekDragRange(dragState);
   clearWeekPreviewViewportLock();
-  if (!normalized) {
-    renderWeekView();
-    return;
-  }
+  if (!normalized) return;
   const safeEnd = normalized.endMinutes === normalized.startMinutes
     ? normalized.startMinutes + DAY_SLOT_MINUTES
     : normalized.endMinutes;
@@ -5890,89 +7096,41 @@ function finalizeWeekDrag() {
   });
 }
 
-/* 第一阶段只开放“周视图已有定时卡片平移修改时间”。
-   这里不做 resize，不做全天转换；只把整张卡片按鼠标落点整体挪动。
-   之所以先限制成这一种，是因为它和 Apple Calendar 的第一层直觉最一致，
-   也能避免在同一阶段里把“拖拽平移 / 拉伸改时长 / 全天与定时互转”三套语义揉在一起。 */
+/* 周视图已有定时卡片拖拽同样只是共享拖拽引擎的 week 适配层。
+   当前仍然只做“整张卡片平移改时间”，不做 resize，也不做全天/定时互转，
+   这样能先把最核心、最直觉的一层交互稳定下来。 */
 function beginWeekTimedCardDrag(event, node, weekDays) {
-  if (event.button !== 0) return;
-  if (event.target.closest("#event-detail-popover")) return;
   const recordId = node.dataset.weekEventId;
   const record = getRecordById(recordId);
   if (!record || record.recordType !== "calendar" || isAllDayLikeRecord(record)) return;
-  const hit = eventToWeekTimelinePosition(event, weekDays);
-  if (!hit) return;
-  const hitTimestamp = timelineHitToTimestamp(hit.dateIso, hit.minutes);
-  if (!Number.isFinite(hitTimestamp)) return;
-  const dragSeed = {
+  beginTimelineMoveDrag(event, node, record, {
     scope: "week",
-    recordId,
-    hitTimestamp,
-    pointerStartX: event.clientX,
-    pointerStartY: event.clientY,
-    didMove: false,
-    previewPayload: null,
-  };
-
-  const handleMove = (moveEvent) => {
-    /* 已有卡片拖拽和空白区拖拽创建共享同一个坐标映射函数，
-       这样“鼠标位置 -> 日期 + 分钟”的换算规则永远一致，
-       就不会出现用户在空白区拖出来是一个时间、拖已有卡片却落到另一套时间的分裂感。 */
-    const nextHit = eventToWeekTimelinePosition(moveEvent, weekDays);
-    if (!nextHit) return;
-    const deltaX = Math.abs(moveEvent.clientX - dragSeed.pointerStartX);
-    const deltaY = Math.abs(moveEvent.clientY - dragSeed.pointerStartY);
-    if (!state.timedCardDrag && deltaX < 4 && deltaY < 4) return;
-
-    const nextTimestamp = timelineHitToTimestamp(nextHit.dateIso, nextHit.minutes);
-    if (!Number.isFinite(nextTimestamp)) return;
-    const deltaMinutes = Math.round((nextTimestamp - dragSeed.hitTimestamp) / 60000);
-    const previewPayload = moveTimedEventByMinutes(record, deltaMinutes);
-    if (!previewPayload) return;
-
-    if (!state.timedCardDrag) {
-      dragSeed.didMove = true;
-      captureWeekPreviewViewport();
-      state.timedCardDrag = { ...dragSeed, previewPayload };
-    } else {
-      state.timedCardDrag.didMove = true;
-      state.timedCardDrag.previewPayload = previewPayload;
-      captureWeekPreviewViewport();
-    }
-    renderWeekView();
-  };
-
-  const handleUp = () => {
-    document.removeEventListener("mousemove", handleMove);
-    document.removeEventListener("mouseup", handleUp);
-    finalizeWeekTimedCardDrag();
-  };
-
-  document.addEventListener("mousemove", handleMove);
-  document.addEventListener("mouseup", handleUp);
+    getGeometry: () => buildWeekTimelineGeometry(weekDays),
+    commit: finalizeWeekTimedCardDrag,
+  });
 }
 
-function finalizeWeekTimedCardDrag() {
-  if (!state.timedCardDrag) return;
-  const dragState = state.timedCardDrag;
-  state.timedCardDrag = null;
+function finalizeWeekTimedCardDrag(record, previewPayload) {
   clearWeekPreviewViewportLock();
-  if (!dragState.didMove || !dragState.previewPayload) {
-    renderWeekView();
-    return;
-  }
-  const record = getRecordById(dragState.recordId);
-  if (!record) {
-    renderWeekView();
-    return;
-  }
+  if (!record || !previewPayload) return;
   /* 只有在 mouseup 确认落点后，才把 previewPayload 真正写回 record。
      拖拽过程中始终只改临时预览，这样页面就不会在鼠标移动中不断持久化、重算索引或触发别的副作用。 */
   preserveWeekPanePosition();
-  updateExistingEvent(dragState.previewPayload);
+  updateExistingEvent(previewPayload);
   persistState();
   markSuppressDetailOpen(record.id);
   renderWeekView();
+  setStatus("已通过拖拽调整日程时间。");
+}
+
+function finalizeDayTimedCardDrag(record, previewPayload) {
+  /* 日视图这里不需要额外保 week viewport，
+     所以提交路径比周视图更轻，只负责写库、刷新当前日视图并吞掉一次详情 click。 */
+  if (!record || !previewPayload) return;
+  updateExistingEvent(previewPayload);
+  persistState();
+  markSuppressDetailOpen(record.id);
+  renderDayView();
   setStatus("已通过拖拽调整日程时间。");
 }
 
@@ -6096,8 +7254,7 @@ function createEventFromForm(payload, options = {}) {
   state.db.rawInputs.unshift(buildRawInput(rawInputId, eventId, payload.rawInput, payload.title, options.rawInputCapturedAt || now));
   upsertSearchDoc(buildSearchDocEntry(event, payload, "calendar", rawInputId));
   saveSnapshot(event, "created");
-  state.editingEventId = eventId;
-  state.editingTodoId = null;
+  setActiveCalendarSelection(eventId);
   if (options.seedForm !== false) {
     seedEmptyInputForm({ ...payload, id: eventId });
   }
@@ -6135,7 +7292,7 @@ function createTodoFromForm(payload, options = {}) {
   upsertSearchDoc(buildSearchDocEntry(todo, payload, "task", rawInputId));
   saveSnapshot(todo, "created");
   state.editingTodoId = todoId;
-  state.editingEventId = null;
+  clearActiveCalendarSelection();
   seedEmptyTodoForm({ ...payload, id: todoId });
 }
 
@@ -6180,8 +7337,7 @@ function updateExistingEvent(payload) {
     state.db.rawInputs.unshift(buildRawInput(effectiveRawInputId, event.id, payload.rawInput, payload.title, new Date().toISOString()));
   }
   upsertSearchDoc(buildSearchDocEntry(event, payload, "calendar", effectiveRawInputId));
-  state.editingEventId = event.id;
-  state.editingTodoId = null;
+  setActiveCalendarSelection(event.id);
 }
 
 function updateExistingTodo(payload) {
@@ -6215,15 +7371,14 @@ function updateExistingTodo(payload) {
   }
   upsertSearchDoc(buildSearchDocEntry(todo, payload, "task", effectiveRawInputId));
   state.editingTodoId = todo.id;
-  state.editingEventId = null;
+  clearActiveCalendarSelection();
 }
 
 function loadEventIntoForm(eventId) {
   const event = getRecordById(eventId);
   if (!event) return;
   const latestRaw = getLatestRawInputForRecord(event.id);
-  state.editingEventId = event.id;
-  state.editingTodoId = null;
+  setActiveCalendarSelection(event.id);
   seedEmptyInputForm({
     id: event.id,
     title: event.title,
@@ -6247,7 +7402,7 @@ function loadTodoIntoForm(todoId) {
   if (!todo) return;
   const latestRaw = getLatestRawInputForRecord(todo.id);
   state.editingTodoId = todo.id;
-  state.editingEventId = null;
+  clearActiveCalendarSelection();
   seedEmptyTodoForm({
     id: todo.id,
     title: todo.title,
@@ -7369,8 +8524,27 @@ function formatDayLabel(date) {
   }).format(date);
 }
 
-function formatWeekdayHeader(date) {
-  return `${WEEKDAY_LABELS[(date.getDay() + 6) % 7]}\n${date.getMonth() + 1}/${date.getDate()}`;
+function buildTodayBadgeMarkup(text) {
+  return `<span class="today-badge">${escapeHtml(String(text || ""))}</span>`;
+}
+
+function buildDayLabelMarkup(date) {
+  const label = formatDayLabel(date);
+  if (isoDate(date) !== isoDate(new Date())) {
+    return escapeHtml(label);
+  }
+  const numericMatch = label.match(/(\d{1,2})日/);
+  if (!numericMatch) return `${escapeHtml(label)} ${buildTodayBadgeMarkup(date.getDate())}`;
+  return escapeHtml(label).replace(numericMatch[0], `${buildTodayBadgeMarkup(numericMatch[1])}`);
+}
+
+function buildDayColumnLabelMarkup(date) {
+  const weekday = WEEKDAY_LABELS[(date.getDay() + 6) % 7];
+  const dateText = `${date.getMonth() + 1}/${date.getDate()}`;
+  if (isoDate(date) !== isoDate(new Date())) {
+    return `${escapeHtml(weekday)} · ${escapeHtml(dateText)}`;
+  }
+  return `${escapeHtml(weekday)} · ${buildTodayBadgeMarkup(dateText)}`;
 }
 
 function formatDateTime(iso) {

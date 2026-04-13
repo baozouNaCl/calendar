@@ -84,6 +84,8 @@ body {
   font-family: var(--font-body);
   font-size: 14px;
   color: var(--text);
+  -webkit-user-select: none;
+  user-select: none;
   background:
     radial-gradient(circle at top left, rgba(17, 94, 89, 0.1), transparent 28%),
     radial-gradient(circle at bottom right, rgba(164, 61, 53, 0.08), transparent 24%),
@@ -1108,6 +1110,7 @@ select:focus {
   overflow: auto;
   padding-right: 6px;
   align-content: start;
+  position: relative;
 }
 
 .month-section {
@@ -1173,8 +1176,29 @@ select:focus {
 .month-inline-chip {
   justify-content: flex-start;
   width: 100%;
-  border: 0;
+  min-height: 14px;
+  padding: 1px 5px;
+  font-size: 0.64rem;
+  line-height: 1.05;
+  border-width: 1px;
+  border-left-width: 2px;
   cursor: pointer;
+}
+
+.calendar-day .day-events {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  min-height: 0;
+}
+
+.month-inline-overflow {
+  margin-top: 1px;
+  padding-left: 6px;
+  font-size: 0.62rem;
+  line-height: 1;
+  color: rgba(91, 103, 124, 0.82);
+  letter-spacing: 0.01em;
 }
 
 .month-span-bar {
@@ -1199,6 +1223,61 @@ select:focus {
 
 .month-span-bar.is-quick-editable {
   cursor: text;
+}
+
+.month-span-bar.is-drag-source,
+.month-inline-chip.is-drag-source {
+  opacity: 0.22;
+  pointer-events: none;
+}
+
+.month-span-bar.is-month-drop-anchor {
+  box-shadow: inset 0 0 0 1px rgba(17, 94, 89, 0.38);
+}
+
+.week-all-day-item.is-all-day-drop-anchor,
+.day-all-day-chip.is-all-day-drop-anchor {
+  box-shadow: inset 0 0 0 1px rgba(17, 94, 89, 0.38);
+}
+
+.month-drag-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* 月视图全天事项拖拽预览与周视图时间块采用同样的思路：
+   预览节点在拖动期间保持复用，只改 top/left/width，
+   这样浏览器才能对位置变化做真实补间，而不是每帧硬切。 */
+.month-drag-layer .month-drag-preview-bar {
+  position: absolute;
+  pointer-events: none;
+  opacity: 0.94;
+  box-shadow:
+    0 10px 18px color-mix(in srgb, var(--record-accent, var(--accent)) 18%, rgba(27, 44, 63, 0.12)),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  transition:
+    top 132ms cubic-bezier(0.2, 0.82, 0.22, 1),
+    left 132ms cubic-bezier(0.2, 0.82, 0.22, 1),
+    width 132ms cubic-bezier(0.2, 0.82, 0.22, 1),
+    opacity 132ms ease-out;
+  will-change: top, left, width;
+}
+
+.month-drag-layer .month-drag-preview-chip {
+  position: absolute;
+  pointer-events: none;
+  opacity: 0.94;
+  box-shadow:
+    0 8px 14px color-mix(in srgb, var(--record-accent, var(--accent)) 14%, rgba(27, 44, 63, 0.1)),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  transition:
+    top 132ms cubic-bezier(0.2, 0.82, 0.22, 1),
+    left 132ms cubic-bezier(0.2, 0.82, 0.22, 1),
+    width 132ms cubic-bezier(0.2, 0.82, 0.22, 1),
+    opacity 132ms ease-out;
+  will-change: top, left, width;
 }
 
 .month-span-bar.is-editing {
@@ -1272,6 +1351,11 @@ select:focus {
 .calendar-day.is-selected {
   background: linear-gradient(180deg, rgba(211, 239, 233, 0.9), rgba(255, 255, 255, 0.75));
   border-color: rgba(17, 94, 89, 0.38);
+}
+
+.calendar-day.is-month-preview {
+  background: color-mix(in srgb, rgba(17, 94, 89, 0.18) 72%, white);
+  border-color: rgba(17, 94, 89, 0.32);
 }
 
 :root[data-ui-theme="soft-sculpt"] .calendar-day.is-selected {
@@ -1383,6 +1467,10 @@ select:focus {
 :root[data-ui-theme="soft-sculpt"] .month-inline-chip,
 :root[data-ui-theme="soft-sculpt"] .month-span-bar {
   box-shadow: none;
+}
+
+:root[data-ui-theme="soft-sculpt"] .month-inline-overflow {
+  color: rgba(97, 113, 135, 0.92);
 }
 
 :root[data-ui-theme="soft-sculpt"] .month-quick-entry-input {
@@ -2552,7 +2640,8 @@ select:focus {
 }
 
 .week-all-day-hit-grid,
-.week-all-day-bars {
+.week-all-day-bars,
+.week-all-day-preview-layer {
   display: grid;
   grid-template-columns: repeat(var(--week-day-count, 7), minmax(0, var(--week-day-width)));
   min-width: 100%;
@@ -2570,6 +2659,24 @@ select:focus {
   grid-auto-rows: 18px;
   row-gap: 2px;
   padding: 4px 0;
+}
+
+.week-all-day-preview-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.week-all-day-drag-preview {
+  position: absolute;
+  pointer-events: none;
+  transition:
+    top 132ms cubic-bezier(0.2, 0.82, 0.22, 1),
+    left 132ms cubic-bezier(0.2, 0.82, 0.22, 1),
+    width 132ms cubic-bezier(0.2, 0.82, 0.22, 1),
+    opacity 132ms ease-out;
+  will-change: top, left, width;
 }
 
 .week-all-day-slot {
@@ -2721,6 +2828,13 @@ select:focus {
   pointer-events: none;
 }
 
+.timeline-drag-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 46;
+}
+
 .week-event-block,
 .week-selection-preview {
   /* 这段定义了“周视图事项卡片”和“拖拽创建时的预览块”的共同基础盒模型：
@@ -2732,6 +2846,22 @@ select:focus {
   padding: 7px 8px 6px;
   overflow: hidden;
   min-width: 0;
+}
+
+/* 时间轴拖拽仍然按 15 分钟网格吸附，但预览层不应该“硬切”到下一格。
+   这里给位置和尺寸一个很轻的过渡，让视觉上像顺着鼠标滑过去，
+   同时避免动画太重导致拖拽显得拖泥带水。 */
+.timeline-drag-layer .week-event-block,
+.timeline-drag-layer .week-selection-preview,
+.timeline-drag-layer .day-event-block,
+.timeline-drag-layer .day-selection-preview {
+  transition:
+    top 132ms cubic-bezier(0.2, 0.82, 0.22, 1),
+    left 132ms cubic-bezier(0.2, 0.82, 0.22, 1),
+    width 132ms cubic-bezier(0.2, 0.82, 0.22, 1),
+    height 132ms cubic-bezier(0.2, 0.82, 0.22, 1),
+    opacity 132ms ease-out;
+  will-change: top, left, width, height;
 }
 
 .week-event-block {
@@ -2752,7 +2882,7 @@ select:focus {
    避免用户误以为“有两张真实卡片”，同时又能知道自己是从哪里拖出来的。 */
 .week-event-block.is-drag-source,
 .day-event-block.is-drag-source {
-  opacity: 0.18;
+  opacity: 0.18 !important;
   pointer-events: none;
 }
 
@@ -2875,6 +3005,19 @@ select:focus {
   white-space: nowrap;
   cursor: pointer;
   border-radius: 999px;
+}
+
+.week-all-day-item.is-drag-source,
+.day-all-day-chip.is-drag-source {
+  opacity: 0.22 !important;
+  pointer-events: none;
+}
+
+.week-all-day-item.is-drag-preview {
+  pointer-events: none;
+  box-shadow:
+    0 10px 18px color-mix(in srgb, var(--record-accent, var(--accent)) 18%, rgba(27, 44, 63, 0.12)),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
 }
 
 /* 周视图顶部全天条带必须和普通事项卡片一样，按记录自己的 tag / accent 着色。
@@ -3354,9 +3497,41 @@ select:focus {
   cursor: pointer;
 }
 
+.day-all-day-chip.is-quick-editable {
+  cursor: text;
+}
+
+.day-all-day-chip.is-editing {
+  padding: 0;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+
 .day-all-day-chip-title {
   font-weight: 700;
   white-space: nowrap;
+}
+
+.day-quick-entry-input {
+  width: 100%;
+  min-width: 0;
+  min-height: 18px;
+  height: 18px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--record-accent-border, var(--record-accent, var(--accent))) 24%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--record-accent, var(--accent)) 16%, white);
+  color: var(--record-accent-text, #134743);
+  font-size: 0.7rem;
+  line-height: 18px;
+  box-shadow: none;
+}
+
+.day-quick-entry-input:focus {
+  outline: none;
+  border-color: var(--record-accent, var(--accent));
 }
 
 .day-scroll-shell {
@@ -3491,6 +3666,13 @@ select:focus {
     );
 }
 
+.day-grid-surface > .timeline-drag-layer,
+.week-grid-surface > .timeline-drag-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
 .day-event-block,
 .day-selection-preview {
   position: absolute;
@@ -3510,15 +3692,27 @@ select:focus {
 }
 
 
-.day-event-block.is-selected,
-.week-event-block.is-selected,
-.week-all-day-item.is-selected,
-.day-all-day-chip.is-selected {
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--record-accent, var(--accent)) 48%, white),
-    0 10px 24px color-mix(in srgb, var(--record-accent, var(--accent)) 18%, transparent);
-  outline: 1px solid color-mix(in srgb, var(--record-accent, var(--accent)) 34%, white);
-  outline-offset: 0;
+.today-badge,
+.calendar-day-date.is-today-badge,
+.week-header-date.is-today-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: #d93025;
+  color: #ffffff;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow: 0 8px 18px rgba(217, 48, 37, 0.22);
+}
+
+.calendar-day-date {
+  display: inline-flex;
+  align-items: center;
+  min-width: 1.5em;
 }
 
 .day-event-block.is-nav-flashing,
@@ -3586,6 +3780,46 @@ select:focus {
 .day-event-block p {
   margin: 0;
   font-size: 0.84rem;
+}
+
+/* 这一段是“当前详情选中的日程卡片”的最终视觉定义。
+   必须放在日 / 周 / 月各自基础卡片样式之后，避免被后面的主题规则重新覆盖回浅色底。
+   设计目标：
+   1. 所有视图都复用同一份 `.is-selected`
+   2. 颜色比普通卡片更实、更饱和
+   3. 定时卡片与全天卡片都吃同一套高亮语义 */
+.day-event-block.is-selected,
+.week-event-block.is-selected,
+.week-all-day-item.is-selected,
+.day-all-day-chip.is-selected,
+.month-inline-chip.is-selected,
+.month-span-bar.is-selected {
+  background: color-mix(in srgb, var(--record-accent, var(--accent)) 88%, white) !important;
+  color: rgba(255, 255, 255, 0.98) !important;
+  border-left-color: color-mix(in srgb, var(--record-accent, var(--accent)) 100%, #0f172a) !important;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--record-accent, var(--accent)) 82%, white),
+    0 14px 28px color-mix(in srgb, var(--record-accent, var(--accent)) 38%, transparent) !important;
+  outline: 1px solid color-mix(in srgb, var(--record-accent, var(--accent)) 74%, white);
+  outline-offset: 0;
+  opacity: 1 !important;
+  filter: saturate(1.18);
+}
+
+.day-event-block.is-selected h3,
+.day-event-block.is-selected p,
+.week-event-block.is-selected h3,
+.week-event-block.is-selected p,
+.week-all-day-item.is-selected,
+.day-all-day-chip.is-selected,
+.month-inline-chip.is-selected,
+.month-span-bar.is-selected {
+  color: rgba(255, 255, 255, 0.98) !important;
+}
+
+.week-event-block.is-selected .week-event-time,
+.week-event-block.is-selected .week-event-location {
+  color: rgba(255, 255, 255, 0.9) !important;
 }
 
 .day-selection-preview {
